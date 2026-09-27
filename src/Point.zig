@@ -35,8 +35,8 @@ pub fn rowMajorIndex(point: Point, size: Size) !usize {
 
 pub fn offsetOrNull(point: Point, size: Size, offset: Offset) ?Point {
     return init(
-        Offset.add(point.row, offset.row, size.height) orelse return null,
-        Offset.add(point.column, offset.column, size.width) orelse return null,
+        offset.row.addUnsigned(point.row, size.height) orelse return null,
+        offset.column.addUnsigned(point.column, size.width) orelse return null,
     );
 }
 

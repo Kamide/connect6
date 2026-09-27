@@ -1,8 +1,11 @@
-const Offset = @This();
-row: i2,
-column: i2,
+const data = @import("data.zig");
+const Trit = data.Trit;
 
-pub fn init(row: i2, column: i2) Offset {
+const Offset = @This();
+row: Trit,
+column: Trit,
+
+pub fn init(row: Trit, column: Trit) Offset {
     return .{
         .row = row,
         .column = column,
@@ -10,26 +13,14 @@ pub fn init(row: i2, column: i2) Offset {
 }
 
 pub fn reversed(offset: Offset) Offset {
-    return .{
-        .row = -offset.row,
-        .column = -offset.column,
-    };
-}
-
-pub fn add(left: usize, right: i2, limit: usize) ?usize {
-    return switch (right) {
-        -2 => if (left < 2) null else left - 2,
-        -1 => if (left < 1) null else left - 1,
-        0 => if (left < limit) left else null,
-        1 => if (limit == 0 or left >= limit - 1) null else left + 1,
-    };
+    return init(offset.row.negate(), offset.column.negate());
 }
 
 pub const toEnd = [_]Offset{
-    .init(0, 1),
-    .init(1, 0),
-    .init(1, 1),
-    .init(1, -1),
+    .init(.zero, .positive),
+    .init(.positive, .zero),
+    .init(.positive, .positive),
+    .init(.positive, .negative),
 };
 
 pub const toStart = reversing: {

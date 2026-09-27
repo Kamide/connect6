@@ -17,10 +17,7 @@ pub fn init(start: Point, end: Point) Line {
 }
 
 pub fn reversed(line: Line) Line {
-    return .{
-        .start = line.end,
-        .end = line.start,
-    };
+    return init(line.end, line.start);
 }
 
 pub fn chebyshevDistance(line: Line) usize {
