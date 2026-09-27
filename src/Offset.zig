@@ -1,3 +1,5 @@
+const std = @import("std");
+
 const data = @import("data.zig");
 const Trit = data.Trit;
 
@@ -32,3 +34,19 @@ pub const toStart = reversing: {
 
     break :reversing offsets;
 };
+
+const testing = std.testing;
+const expectEqual = testing.expectEqual;
+
+test "Offset" {
+    const fields = @typeInfo(Trit).@"enum".fields;
+
+    inline for (fields) |row_field| {
+        inline for (fields) |column_field| {
+            const row = @field(Trit, row_field.name);
+            const column = @field(Trit, column_field.name);
+            const offset = init(row, column);
+            try expectEqual(offset, offset.reversed().reversed());
+        }
+    }
+}

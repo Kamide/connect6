@@ -15,10 +15,11 @@ pub const isEven = math.isEven;
 pub const isOdd = math.isOdd;
 
 test "root" {
-    _ = @import("data.zig");
     _ = @import("math.zig");
+    _ = @import("data.zig");
     _ = @import("Size.zig");
     _ = @import("Point.zig");
+    _ = @import("Offset.zig");
     _ = @import("Line.zig");
     _ = @import("Game.zig");
 }
