@@ -153,10 +153,8 @@ pub fn canUndo(game: *const Game) bool {
 
 pub fn undo(game: *Game) ?Point {
     const point = game.points.pop() orelse return null;
-
     game.pieces[point.rowMajorIndexUnchecked(game.size)] = null;
     game.lines = @splat(null);
-
     return point;
 }
 
