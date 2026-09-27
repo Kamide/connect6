@@ -7,6 +7,7 @@ pub const Size = @import("Size.zig");
 const data = @import("data.zig");
 pub const Error = data.Error;
 pub const Piece = data.Piece;
+pub const Trit = data.Trit;
 
 const math = @import("math.zig");
 pub const absoluteDifference = math.absoluteDifference;
@@ -14,6 +15,7 @@ pub const isEven = math.isEven;
 pub const isOdd = math.isOdd;
 
 test "root" {
+    _ = @import("data.zig");
     _ = @import("math.zig");
     _ = @import("Size.zig");
     _ = @import("Point.zig");
