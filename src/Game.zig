@@ -19,7 +19,7 @@ const isOdd = math.isOdd;
 const Game = @This();
 allocator: Allocator,
 size: Size,
-lines: [Offset.toEnd.len]?Line,
+lines: [Offset.to_end.len]?Line,
 points: ArrayList(Point),
 pieces: []?Piece,
 
@@ -110,7 +110,7 @@ pub fn play(game: *Game, point: Point) !void {
     try game.points.append(game.allocator, point);
     game.pieces[index] = piece;
 
-    for (Offset.toStart, Offset.toEnd, 0..) |to_start, to_end, direction| {
+    for (Offset.to_start, Offset.to_end, 0..) |to_start, to_end, direction| {
         const start = game.terminalPoint(point, piece, to_start);
         const end = game.terminalPoint(point, piece, to_end);
         const line = Line.init(start, end);

@@ -18,18 +18,18 @@ pub fn reversed(offset: Offset) Offset {
     return init(offset.row.negate(), offset.column.negate());
 }
 
-pub const toEnd = [_]Offset{
+pub const to_end = [_]Offset{
     .init(.zero, .positive),
     .init(.positive, .zero),
     .init(.positive, .positive),
     .init(.positive, .negative),
 };
 
-pub const toStart = reversing: {
-    var offsets: [toEnd.len]Offset = undefined;
+pub const to_start = reversing: {
+    var offsets: [to_end.len]Offset = undefined;
 
-    for (toEnd, 0..) |end, index| {
-        offsets[index] = end.reversed();
+    for (to_end, 0..) |offset, index| {
+        offsets[index] = offset.reversed();
     }
 
     break :reversing offsets;
