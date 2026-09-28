@@ -145,6 +145,7 @@ xcuserdata/
 ### Zig template
 .zig-cache/
 zig-out/
+zig-pkg/
 
 ### Node template
 # Logs
