@@ -51,20 +51,23 @@ pub fn reset(game: *Game) void {
     game.lines = @splat(null);
 }
 
-pub fn turnCount(game: *const Game) usize {
+pub fn piecesPlayed(game: *const Game) usize {
     return game.points.items.len;
 }
 
 pub fn currentPlayer(game: *const Game) Piece {
-    return if (isEven(game.turnCount())) .black else .white;
+    return switch (game.piecesPlayed()) {
+        0 => .black,
+        else => |count| if (isOdd((count - 1) / 2)) .black else .white,
+    };
 }
 
 pub fn nextPlayer(game: *const Game) Piece {
-    return if (isOdd(game.turnCount())) .black else .white;
+    return if (isEven(game.piecesPlayed() / 2)) .white else .black;
 }
 
 pub fn isFull(game: *const Game) bool {
-    return game.turnCount() == game.size.area();
+    return game.piecesPlayed() == game.size.area();
 }
 
 pub fn winner(game: *const Game) ?Piece {
@@ -147,8 +150,13 @@ fn pieceAtUnchecked(game: *const Game, point: Point) ?Piece {
     return game.pieces[point.rowMajorIndexUnchecked(game.size)];
 }
 
+pub fn pieceAt(game: *const Game, point: Point) !?Piece {
+    const index = try point.rowMajorIndex(game.size);
+    return game.pieces[index];
+}
+
 pub fn canUndo(game: *const Game) bool {
-    return game.turnCount() > 0;
+    return game.piecesPlayed() > 0;
 }
 
 pub fn undo(game: *Game) ?Point {
@@ -161,45 +169,71 @@ pub fn undo(game: *Game) ?Point {
 const testing = std.testing;
 const expect = testing.expect;
 const expectEqual = testing.expectEqual;
+const expectEqualDeep = testing.expectEqualDeep;
 
 test "Game" {
     var game = try Game.init(testing.allocator, .square(19));
     defer game.deinit();
-
-    try expectEqual(0, game.turnCount());
-    try expectEqual(.black, game.currentPlayer());
-    try expectEqual(.white, game.nextPlayer());
 
     try expect(!game.isFull());
     try expectEqual(null, game.winner());
     try expect(!game.isOver());
     try expect(!game.isDraw());
 
-    const start = Point.init(0, 1);
-    try expect(game.canPlay(start));
-    try game.play(start);
-    try expect(!game.canPlay(start));
+    const moves = [_]Point{
+        .init(0, 1),
+        .coincident(1),
+        .coincident(2),
+        .init(0, 2),
+        .init(0, 3),
+        .coincident(3),
+        .coincident(4),
+        .init(0, 4),
+        .init(0, 5),
+        .coincident(5),
+        .coincident(6),
+    };
 
-    for (1..6) |column| {
-        const white = Point.coincident(column - 1);
-        try expect(game.canPlay(white));
-        try game.play(white);
-        try expect(!game.canPlay(white));
+    for (moves, 0..) |move, count| {
+        try expectEqual(count, game.piecesPlayed());
 
-        const black = Point.init(0, column + 1);
-        try expect(game.canPlay(black));
-        try game.play(black);
-        try expect(!game.canPlay(black));
+        switch (count) {
+            0 => {
+                try expectEqual(.black, game.currentPlayer());
+                try expectEqual(.white, game.nextPlayer());
+            },
+            1, 5, 9 => {
+                try expectEqual(.white, game.currentPlayer());
+                try expectEqual(.white, game.nextPlayer());
+            },
+            2, 6, 10 => {
+                try expectEqual(.white, game.currentPlayer());
+                try expectEqual(.black, game.nextPlayer());
+            },
+            3, 7 => {
+                try expectEqual(.black, game.currentPlayer());
+                try expectEqual(.black, game.nextPlayer());
+            },
+            4, 8 => {
+                try expectEqual(.black, game.currentPlayer());
+                try expectEqual(.white, game.nextPlayer());
+            },
+            else => unreachable,
+        }
+
+        try expect(game.canPlay(move));
+        try game.play(move);
+        try expect(!game.canPlay(move));
     }
 
     try expect(!game.isFull());
-    try expectEqual(.black, game.winner());
+    try expectEqual(.white, game.winner());
     try expect(game.isOver());
     try expect(!game.isDraw());
 }
 
 test "Game.isDraw" {
-    for (1..6) |size| {
+    for (1..7) |size| {
         var game = try Game.init(testing.allocator, .square(size));
         defer game.deinit();
 
@@ -216,35 +250,22 @@ test "Game.isDraw" {
     }
 }
 
-test "Game.reset" {
-    var undo_game = try Game.init(testing.allocator, .square(19));
-    defer undo_game.deinit();
+test "Game.{reset,undo}" {
+    const size = 6;
 
-    var reset_game = try Game.init(testing.allocator, .square(19));
+    var reset_game = try Game.init(testing.allocator, .square(size));
     defer reset_game.deinit();
 
-    const moves = [_]Point{
-        .init(0, 1),
-        .coincident(0),
-        .init(0, 2),
-        .coincident(1),
-        .init(0, 3),
-        .coincident(2),
-        .init(0, 4),
-        .coincident(3),
-        .init(0, 5),
-        .coincident(4),
-        .init(0, 6),
-    };
+    var undo_game = try Game.init(testing.allocator, .square(size));
+    defer undo_game.deinit();
 
-    for (moves) |point| {
-        try undo_game.play(point);
-        try reset_game.play(point);
+    for (0..size) |row| {
+        for (0..size) |column| {
+            const point = Point.init(row, column);
+            try reset_game.play(point);
+            try undo_game.play(point);
+        }
     }
-
-    try expectEqual(.black, reset_game.winner());
-    try expect(reset_game.isOver());
-    try expect(!reset_game.isDraw());
 
     reset_game.reset();
 
@@ -252,17 +273,5 @@ test "Game.reset" {
         _ = undo_game.undo();
     }
 
-    try expectEqual(null, reset_game.winner());
-    try expect(!reset_game.isOver());
-    try expect(!reset_game.isDraw());
-
-    try expectEqual(undo_game.turnCount(), reset_game.turnCount());
-    try expectEqual(undo_game.currentPlayer(), reset_game.currentPlayer());
-    try expectEqual(undo_game.nextPlayer(), reset_game.nextPlayer());
-    try expectEqual(undo_game.winner(), reset_game.winner());
-    try expectEqual(undo_game.isOver(), reset_game.isOver());
-    try expectEqual(undo_game.isDraw(), reset_game.isDraw());
-
-    try expectEqual(null, undo_game.undo());
-    try expectEqual(null, reset_game.undo());
+    try expectEqualDeep(reset_game, undo_game);
 }
