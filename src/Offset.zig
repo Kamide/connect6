@@ -39,12 +39,12 @@ const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
 test "Offset" {
-    const fields = @typeInfo(Trit).@"enum".fields;
+    const info = @typeInfo(Trit).@"enum";
 
-    inline for (fields) |row_field| {
-        inline for (fields) |column_field| {
-            const row = @field(Trit, row_field.name);
-            const column = @field(Trit, column_field.name);
+    inline for (info.field_names) |row_field_name| {
+        inline for (info.field_names) |column_field_name| {
+            const row = @field(Trit, row_field_name);
+            const column = @field(Trit, column_field_name);
             const offset = init(row, column);
             try expectEqual(offset, offset.reversed().reversed());
         }
