@@ -4,9 +4,13 @@
     .fingerprint = 0x90c4b81875a73bf1,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
+        .emsdk = .{
+            .url = "git+https://github.com/emscripten-core/emsdk#4.0.9",
+            .hash = "N-V-__8AAJl1DwBezhYo_VE6f53mPVm00R-Fk28NPW7P14EQ",
+        },
         .raylib_zig = .{
-            .url = "git+https://github.com/raylib-zig/raylib-zig?ref=devel#50d450099da664bedd7dcc6ed40204ab0bb861a5",
-            .hash = "raylib_zig-6.0.0-KE8REDSmBQAbyUv_Fh71wgvhQSP2zsmVxtPRLzCgIXWK",
+            .url = "git+https://github.com/raylib-zig/raylib-zig?ref=devel#f6de93c03197260df941b36ddf3b8dab12bcd393",
+            .hash = "raylib_zig-6.0.0-KE8REN2mBQC2nQqk9ILHtZgMfQ-3tZpKCvyhmyUPra_3",
         },
     },
     .paths = .{
