@@ -1,0 +1,9 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="native" type="ZIGBRAINS_BINARY" factoryName="ZIGBRAINS_BINARY">
+    <ZigBrainsOption name="workingDirectory" value="$PROJECT_DIR$" />
+    <envs />
+    <ZigBrainsOption name="exePath" value="$PROJECT_DIR$/zig-out/bin/connect6.exe" />
+    <ZigBrainsOption name="args" value="build run" />
+    <method v="2" />
+  </configuration>
+</component>
