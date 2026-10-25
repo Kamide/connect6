@@ -64,7 +64,12 @@ const App = struct {
                 .exit => break :game_loop,
             }
 
+            if (app.screen == .exit) {
+                break :game_loop;
+            }
+
             rl.beginDrawing();
+            defer rl.endDrawing();
 
             switch (app.screen) {
                 .main_menu => MainMenu.render(app),
@@ -75,8 +80,6 @@ const App = struct {
                 .credits => Credits.render(app),
                 .exit => unreachable,
             }
-
-            rl.endDrawing();
         }
     }
 };
