@@ -52,7 +52,7 @@ pub fn build(b: *Build) !void {
                 .optimize = optimize,
                 .flags = emsdk.emccDefaultFlags(b.allocator, .{ .optimize = optimize }),
                 .settings = emsdk.emccDefaultSettings(b.allocator, .{ .optimize = optimize }),
-                .shell_file_path = raylib_dependency.builder.dependency("raylib", .{}).path("src/shell.html"),
+                .shell_file_path = raylib_dependency.builder.dependency("raylib", .{}).path("src/minshell.html"),
                 .install_dir = .{ .custom = "web" },
                 .preload_paths = &.{.{ .src_path = b.path("resources"), .virtual_path = "resources" }},
                 .out_file_name = "index.html",
