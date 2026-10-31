@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 128">
+  <rect width="100%" height="100%" fill="#48c4cc" fill-opacity="0" />
+
+  <view id="grid" viewBox="0 0 128 128" />
+  <circle cx="64" cy="64" r="28" fill="#395f46" fill-opacity=".125" />
+
+  <view id="shadow" viewBox="128 0 128 128" />
+  <circle cx="192" cy="64" r="64" fill="url(#shadowGradient)" />
+  <radialGradient id="shadowGradient">
+    <stop stop-color="#002e47" stop-opacity=".2" />
+    <stop offset="1" stop-color="#002e47" stop-opacity="0" />
+  </radialGradient>
+
+  <view id="black" viewBox="256 0 128 128" />
+  <circle cx="320" cy="64" r="56" fill="url(#blackGradient)" />
+  <radialGradient id="blackGradient" cx=".5" cy=".5" r="1" fx=".72" fy=".24">
+    <stop stop-color="#6d7189" />
+    <stop offset=".1" stop-color="#5c6074" />
+    <stop offset=".5" stop-color="#3d414f" />
+    <stop offset=".6" stop-color="#3d414f" stop-opacity=".72" />
+  </radialGradient>
+
+  <view id="white" viewBox="384 0 128 128" />
+  <circle cx="448" cy="64" r="56" fill="url(#whiteGradient)" />
+  <radialGradient id="whiteGradient" cx=".5" cy=".5" r="1" fx=".72" fy=".24">
+    <stop stop-color="#f1f1e3" />
+    <stop offset=".1" stop-color="#f1f1e6" />
+    <stop offset=".5" stop-color="#dce5e1" />
+    <stop offset=".6" stop-color="#dce5e1" stop-opacity=".72" />
+  </radialGradient>
+</svg>
