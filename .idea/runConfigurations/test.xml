@@ -2,8 +2,8 @@
   <configuration default="false" name="test" type="ZIGBRAINS_BUILD" factoryName="ZIGBRAINS_BUILD">
     <ZigBrainsOption name="workingDirectory" value="$PROJECT_DIR$" />
     <envs />
-    <ZigBrainsOption name="buildSteps" value="" />
-    <ZigBrainsOption name="compilerArgs" value="test" />
+    <ZigBrainsOption name="buildSteps" value="test" />
+    <ZigBrainsOption name="compilerArgs" value="" />
     <ZigBrainsOption name="debugBuildSteps" value="" />
     <ZigBrainsOption name="debugCompilerArgs" value="" />
     <ZigBrainsOption name="exePath" value="" />
