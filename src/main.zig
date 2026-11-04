@@ -141,10 +141,10 @@ const TextKey = enum {
 
 const CodepointBuffer = struct {
     items: [512]i32 = @splat(0),
-    len: usize = 0,
+    length: usize = 0,
 
     fn contains(buffer: *const CodepointBuffer, codepoint: i32) bool {
-        for (buffer.items[0..buffer.len]) |existing| {
+        for (buffer.items[0..buffer.length]) |existing| {
             if (existing == codepoint) {
                 return true;
             }
@@ -156,21 +156,21 @@ const CodepointBuffer = struct {
         if (buffer.contains(codepoint)) {
             return;
         }
-        if (buffer.len >= buffer.items.len) {
+        if (buffer.length >= buffer.items.len) {
             return;
         }
-        buffer.items[buffer.len] = codepoint;
-        buffer.len += 1;
+        buffer.items[buffer.length] = codepoint;
+        buffer.length += 1;
     }
 
-    fn addUtf8(buffer: *CodepointBuffer, str: [:0]const u8) void {
+    fn addUtf8(buffer: *CodepointBuffer, string: [:0]const u8) void {
         var index: usize = 0;
-        while (index < str.len) {
-            const length = std.unicode.utf8ByteSequenceLength(str[index]) catch 1;
-            if (index + length > str.len) {
+        while (index < string.len) {
+            const length = std.unicode.utf8ByteSequenceLength(string[index]) catch 1;
+            if (index + length > string.len) {
                 break;
             }
-            const codepoint = std.unicode.utf8Decode(str[index .. index + length]) catch {
+            const codepoint = std.unicode.utf8Decode(string[index .. index + length]) catch {
                 index += 1;
                 continue;
             };
@@ -211,7 +211,7 @@ const Fonts = struct {
         const default = try rl.loadFontEx(
             "resources/fonts/ResourceHanRounded/CN/Heavy.ttf",
             atlas_size,
-            used_codepoints.items[0..used_codepoints.len],
+            used_codepoints.items[0..used_codepoints.length],
         );
         errdefer rl.unloadFont(default);
         return .{ .default = default };
@@ -333,7 +333,7 @@ const Action = union(enum) {
             .choose_white => |player| {
                 app.white = player;
                 app.startGame() catch |err| {
-                    std.log.err("Could not start game: {any}", .{err});
+                    std.log.err("StartGameError: {any}", .{err});
                     app.screen = .select_size;
                 };
             },
@@ -418,7 +418,7 @@ const App = struct {
     }
 
     fn startGame(app: *App) !void {
-        const size = app.size orelse return error.BoardSizeNotSelected;
+        const size = app.size orelse return c6.Error.InvalidSize;
         const new_game = try c6.Game.init(app.allocator, size);
 
         if (app.game) |*previous| {
@@ -466,15 +466,15 @@ const Layout = struct {
     fn menuGridAt(app: *const App, center: f32, count: usize) Grid {
         const height = menuHeight(count);
         return Grid.init(
-            .{
-                .x = x(app),
-                .y = app.viewport.height * center - height * 0.5,
-                .width = width(app),
-                .height = height,
-            },
+            .init(
+                x(app),
+                app.viewport.height * center - height * 0.5,
+                width(app),
+                height,
+            ),
             count,
             1,
-        ).withSpacing(.{ .x = 0, .y = button_gap });
+        ).withSpacing(.init(0, button_gap));
     }
 
     fn backGrid(app: *const App) Grid {
@@ -488,10 +488,14 @@ const Grid = struct {
     columns: usize,
     gap: rl.Vector2 = .zero(),
 
-    fn init(area: rl.Rectangle, rows: usize, columns: usize) Grid {
+    fn init(bounds: rl.Rectangle, rows: usize, columns: usize) Grid {
         std.debug.assert(rows > 0);
         std.debug.assert(columns > 0);
-        return .{ .bounds = area, .rows = rows, .columns = columns };
+        return .{
+            .bounds = bounds,
+            .rows = rows,
+            .columns = columns,
+        };
     }
 
     fn withSpacing(grid: Grid, gap_size: rl.Vector2) Grid {
@@ -514,12 +518,12 @@ const Grid = struct {
         const height =
             (grid.bounds.height - grid.gap.y * (rows - 1)) / rows;
 
-        return .{
-            .x = grid.bounds.x + column_index * (width + grid.gap.x),
-            .y = grid.bounds.y + row_index * (height + grid.gap.y),
-            .width = width,
-            .height = height,
-        };
+        return .init(
+            grid.bounds.x + column_index * (width + grid.gap.x),
+            grid.bounds.y + row_index * (height + grid.gap.y),
+            width,
+            height,
+        );
     }
 };
 
@@ -536,7 +540,7 @@ const Text = struct {
 
     fn withPosition(text: Text, x: f32, y: f32) Text {
         var result = text;
-        result.position = .{ .x = x, .y = y };
+        result.position = .init(x, y);
         return result;
     }
 
@@ -660,12 +664,12 @@ const Button = struct {
     fn draw(button: Button, app: *const App) Button {
         const active = button.pressed(app.pointer);
 
-        const face = rl.Rectangle{
-            .x = button.rectangle.x,
-            .y = button.rectangle.y + @as(f32, if (active) 2.0 else 0.0),
-            .width = button.rectangle.width,
-            .height = button.rectangle.height,
-        };
+        const face = rl.Rectangle.init(
+            button.rectangle.x,
+            button.rectangle.y + @as(f32, if (active) 2.0 else 0.0),
+            button.rectangle.width,
+            button.rectangle.height,
+        );
 
         rl.drawRectangleRounded(face, 1, 8, button.fillColor(app));
 
@@ -793,7 +797,6 @@ const SelectSize = struct {
                         .next_screen = .select_black,
                     },
                 }).perform(app);
-                return;
             }
         }
 
@@ -931,10 +934,7 @@ const Duel = struct {
                         app.shake.trigger(point);
                     } else {
                         game.play(point) catch |err| {
-                            std.log.debug(
-                                "Cannot play at {any}: {any}",
-                                .{ point, err },
-                            );
+                            std.log.err("PlayPointError: {any}, {any}", .{ point, err });
                         };
                     }
                 }
@@ -945,12 +945,12 @@ const Duel = struct {
     }
 
     fn drawBackControl(app: *App) void {
-        const rect = rl.Rectangle{
-            .x = app.viewport.width - back_button_width - corner_pad,
-            .y = corner_pad,
-            .width = back_button_width,
-            .height = back_button_height,
-        };
+        const rect = rl.Rectangle.init(
+            app.viewport.width - back_button_width - corner_pad,
+            corner_pad,
+            back_button_width,
+            back_button_height,
+        );
 
         if (Button.init(TextKey.back.get(app.language))
             .withBounds(rect)
@@ -996,10 +996,10 @@ const Duel = struct {
 
             drawTextureCentered(
                 app.textures.stone(game.currentPlayer()),
-                .{
-                    .x = corner_pad + text_dim.x + status_stone_gap,
-                    .y = corner_pad + @as(f32, status_font_size) / 2 + 2,
-                },
+                .init(
+                    corner_pad + text_dim.x + status_stone_gap,
+                    corner_pad + @as(f32, status_font_size) / 2 + 2,
+                ),
                 @floatFromInt(status_font_size),
                 .white,
             );
@@ -1016,12 +1016,12 @@ const Duel = struct {
         const y = app.viewport.height - button_height - corner_pad;
 
         for (buttons) |key| {
-            const rect = rl.Rectangle{
-                .x = x,
-                .y = y,
-                .width = button_width,
-                .height = button_height,
-            };
+            const rect = rl.Rectangle.init(
+                x,
+                y,
+                button_width,
+                button_height,
+            );
 
             if (Button.init(key.get(app.language))
                 .withBounds(rect)
@@ -1083,10 +1083,10 @@ const ShakeAnimation = struct {
         const progress = shake.remaining / duration;
         const fade = progress * amplitude;
 
-        return .{
-            .x = @sin(shake.remaining * frequency) * fade,
-            .y = @cos(shake.remaining * frequency * 1.37) * fade,
-        };
+        return .init(
+            @sin(shake.remaining * frequency) * fade,
+            @cos(shake.remaining * frequency * 1.37) * fade,
+        );
     }
 };
 
@@ -1108,21 +1108,21 @@ const BoardGeometry = struct {
     }
 
     fn bounds(geometry: BoardGeometry) rl.Rectangle {
-        return .{
-            .x = geometry.x - geometry.padding,
-            .y = geometry.y - geometry.padding,
-            .width = geometry.width() + geometry.padding * 2,
-            .height = geometry.height() + geometry.padding * 2,
-        };
+        return .init(
+            geometry.x - geometry.padding,
+            geometry.y - geometry.padding,
+            geometry.width() + geometry.padding * 2,
+            geometry.height() + geometry.padding * 2,
+        );
     }
 
     fn position(geometry: BoardGeometry, point: c6.Point) rl.Vector2 {
-        return .{
-            .x = geometry.x +
+        return .init(
+            geometry.x +
                 @as(f32, @floatFromInt(point.column)) * geometry.spacing,
-            .y = geometry.y +
+            geometry.y +
                 @as(f32, @floatFromInt(point.row)) * geometry.spacing,
-        };
+        );
     }
 
     fn mouseToPoint(geometry: BoardGeometry, mouse: rl.Vector2) ?c6.Point {
@@ -1144,7 +1144,7 @@ const BoardGeometry = struct {
             return null;
         }
 
-        return c6.Point.init(row, column);
+        return .init(row, column);
     }
 };
 
@@ -1213,10 +1213,10 @@ fn drawBoard(
 
         drawTextureCentered(
             textures.shadow,
-            .{
-                .x = stone_position.x - geometry.spacing * 0.025,
-                .y = stone_position.y + geometry.spacing * 0.1,
-            },
+            .init(
+                stone_position.x - geometry.spacing * 0.025,
+                stone_position.y + geometry.spacing * 0.1,
+            ),
             geometry.spacing,
             .white,
         );
@@ -1258,14 +1258,14 @@ fn drawTextureCentered(
 
     rl.drawTexturePro(
         texture,
-        .{ .x = 0, .y = 0, .width = tex_width, .height = tex_height },
-        .{
-            .x = center.x - tex_width * scale * 0.5,
-            .y = center.y - tex_height * scale * 0.5,
-            .width = tex_width * scale,
-            .height = tex_height * scale,
-        },
-        .{ .x = 0, .y = 0 },
+        .init(0, 0, tex_width, tex_height),
+        .init(
+            center.x - tex_width * scale * 0.5,
+            center.y - tex_height * scale * 0.5,
+            tex_width * scale,
+            tex_height * scale,
+        ),
+        .zero(),
         0,
         tint,
     );
@@ -1281,14 +1281,14 @@ fn drawGrid(
 
     rl.drawTexturePro(
         texture,
-        .{
-            .x = 0,
-            .y = 0,
-            .width = destination.width / geometry.spacing * tex_width,
-            .height = destination.height / geometry.spacing * tex_height,
-        },
+        .init(
+            0,
+            0,
+            destination.width / geometry.spacing * tex_width,
+            destination.height / geometry.spacing * tex_height,
+        ),
         destination,
-        .{ .x = 0, .y = 0 },
+        .zero(),
         0,
         .white,
     );
