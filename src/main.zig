@@ -214,9 +214,11 @@ const Fonts = struct {
             used_codepoints.items[0..used_codepoints.len],
         );
         errdefer rl.unloadFont(default);
-
-        rl.setTextureFilter(default.texture, .bilinear);
         return .{ .default = default };
+    }
+
+    fn update(fonts: *Fonts) void {
+        rl.setTextureFilter(fonts.default.texture, .bilinear);
     }
 
     fn deinit(fonts: *Fonts) void {
@@ -316,7 +318,6 @@ const Action = union(enum) {
     choose_size: struct { size: c6.Size, next_screen: Screen },
     choose_black: Player,
     choose_white: Player,
-    open_language_menu,
 
     fn perform(action: Action, app: *App) void {
         switch (action) {
@@ -336,10 +337,6 @@ const Action = union(enum) {
                     app.screen = .select_size;
                 };
             },
-            .open_language_menu => {
-                app.pending_language = app.language;
-                app.screen = .select_language;
-            },
         }
     }
 };
@@ -354,7 +351,6 @@ const App = struct {
     pointer: Pointer = .{},
     screen: Screen = .main_menu,
     language: Language = .english,
-    pending_language: Language = .english,
     size: ?c6.Size = null,
     black: ?Player = null,
     white: ?Player = null,
@@ -386,8 +382,15 @@ const App = struct {
         rl.maximizeWindow();
         rl.setExitKey(.null);
 
+        if (is_wasm) {
+            rl.beginDrawing();
+            defer rl.endDrawing();
+            rl.clearBackground(app.colors.background);
+        }
+
         app.fonts = try Fonts.init();
         defer app.fonts.deinit();
+        app.fonts.update();
 
         app.textures = try Textures.init();
         defer app.textures.deinit();
@@ -751,7 +754,7 @@ const main_menu_screen = MenuScreen{
     .title_size = 58,
     .buttons = &.{
         .{ .label = .start, .action = .{ .go = .select_size }, .primary = true },
-        .{ .label = .language, .action = .open_language_menu },
+        .{ .label = .language, .action = .{ .go = .select_language } },
         .{ .label = .credits, .action = .{ .go = .credits } },
         .{ .label = .exit, .action = .{ .go = .exit }, .disabled = is_wasm },
     },
@@ -871,12 +874,12 @@ const SelectLanguage = struct {
             var button = Button.init(lang.label())
                 .withBounds(grid.cell(i, 0));
 
-            if (app.pending_language == lang) {
+            if (app.language == lang) {
                 button = button.withPrimary();
             }
 
             if (button.draw(app).clicked(app.pointer)) {
-                app.pending_language = lang;
+                app.language = lang;
             }
         }
 
@@ -885,7 +888,6 @@ const SelectLanguage = struct {
             .draw(app)
             .clicked(app.pointer))
         {
-            app.language = app.pending_language;
             app.screen = .main_menu;
         }
     }
