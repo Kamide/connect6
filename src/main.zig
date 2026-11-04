@@ -180,7 +180,7 @@ const CodepointBuffer = struct {
     }
 };
 
-const used_codepoints = blk: {
+const used_codepoints = collecting: {
     @setEvalBranchQuota(1_112_064);
 
     var buffer = CodepointBuffer{};
@@ -199,7 +199,7 @@ const used_codepoints = blk: {
         buffer.addUtf8(key.chinese());
     }
 
-    break :blk buffer;
+    break :collecting buffer;
 };
 
 const Fonts = struct {
@@ -381,12 +381,6 @@ const App = struct {
 
         rl.maximizeWindow();
         rl.setExitKey(.null);
-
-        if (is_wasm) {
-            rl.beginDrawing();
-            defer rl.endDrawing();
-            rl.clearBackground(app.colors.background);
-        }
 
         app.fonts = try Fonts.init();
         defer app.fonts.deinit();
@@ -768,11 +762,11 @@ const MainMenu = struct {
 
 const SelectSize = struct {
     const sizes = [_]c6.Size{
-        c6.Size.square(19),
-        c6.Size.square(15),
-        c6.Size.square(13),
-        c6.Size.square(11),
-        c6.Size.square(9),
+        .square(19),
+        .square(15),
+        .square(13),
+        .square(11),
+        .square(9),
     };
 
     const labels = [_][:0]const u8{
@@ -932,15 +926,17 @@ const Duel = struct {
 
         if (!game.isOver() and app.pointer.pressed) {
             if (geometry.mouseToPoint(app.pointer.position)) |point| {
-                if ((game.pieceAt(point) catch null) != null) {
-                    app.shake.trigger(point);
-                } else {
-                    game.play(point) catch |err| {
-                        std.log.debug(
-                            "Cannot play at {any}: {any}",
-                            .{ point, err },
-                        );
-                    };
+                playing: {
+                    if ((game.pieceAt(point) catch break :playing) != null) {
+                        app.shake.trigger(point);
+                    } else {
+                        game.play(point) catch |err| {
+                            std.log.debug(
+                                "Cannot play at {any}: {any}",
+                                .{ point, err },
+                            );
+                        };
+                    }
                 }
             }
         }
@@ -1235,13 +1231,15 @@ fn drawBoard(
 
     if (!game.isOver()) {
         if (geometry.mouseToPoint(app.pointer.position)) |point| {
-            if ((game.pieceAt(point) catch null) == null) {
-                drawTextureCentered(
-                    textures.stone(game.currentPlayer()),
-                    geometry.position(point),
-                    geometry.spacing,
-                    .{ .r = 255, .g = 255, .b = 255, .a = 125 },
-                );
+            drawing: {
+                if ((game.pieceAt(point) catch break :drawing) == null) {
+                    drawTextureCentered(
+                        textures.stone(game.currentPlayer()),
+                        geometry.position(point),
+                        geometry.spacing,
+                        .{ .r = 255, .g = 255, .b = 255, .a = 125 },
+                    );
+                }
             }
         }
     }
