@@ -24,6 +24,7 @@ const Colors = struct {
     button_primary: rl.Color,
     button_primary_hover: rl.Color,
     button_primary_pressed: rl.Color,
+    line: rl.Color,
     highlight: rl.Color,
 
     fn init() Colors {
@@ -39,7 +40,8 @@ const Colors = struct {
             .button_primary = .fromInt(0xffffffff),
             .button_primary_hover = .fromInt(0xf0f0f0ff),
             .button_primary_pressed = .fromInt(0xd0d0d0ff),
-            .highlight = .fromInt(0xe89941ff),
+            .line = .fromInt(0xe89941ff),
+            .highlight = .fromInt(0xffffff7d),
         };
     }
 };
@@ -1194,7 +1196,7 @@ fn drawBoard(
             geometry.position(line.start),
             geometry.position(line.end),
             geometry.spacing * 0.12,
-            app.colors.highlight,
+            app.colors.line,
         );
     }
 
@@ -1237,7 +1239,7 @@ fn drawBoard(
                         textures.stone(game.currentPlayer()),
                         geometry.position(point),
                         geometry.spacing,
-                        .{ .r = 255, .g = 255, .b = 255, .a = 125 },
+                        app.colors.highlight,
                     );
                 }
             }
