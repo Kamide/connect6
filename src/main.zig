@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const rl = @import("raylib");
 const c6 = @import("connect6");
 
-const window_title = "Connect6";
 const is_wasm = builtin.cpu.arch == .wasm32 or builtin.cpu.arch == .wasm64;
 
 pub fn main(init: std.process.Init) !void {
@@ -50,8 +49,8 @@ const Language = enum {
     english,
     chinese,
 
-    fn label(lang: Language) [:0]const u8 {
-        return switch (lang) {
+    fn label(language: Language) [:0]const u8 {
+        return switch (language) {
             .english => "English",
             .chinese => "中文",
         };
@@ -81,8 +80,8 @@ const TextKey = enum {
     black_to_play,
     white_to_play,
 
-    fn get(key: TextKey, lang: Language) [:0]const u8 {
-        return switch (lang) {
+    fn get(key: TextKey, language: Language) [:0]const u8 {
+        return switch (language) {
             .english => key.english(),
             .chinese => key.chinese(),
         };
@@ -141,67 +140,75 @@ const TextKey = enum {
     }
 };
 
-const CodepointBuffer = struct {
-    items: [512]i32 = @splat(0),
-    length: usize = 0,
-
-    fn contains(buffer: *const CodepointBuffer, codepoint: i32) bool {
-        for (buffer.items[0..buffer.length]) |existing| {
-            if (existing == codepoint) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    fn add(buffer: *CodepointBuffer, codepoint: i32) void {
-        if (buffer.contains(codepoint)) {
-            return;
-        }
-        if (buffer.length >= buffer.items.len) {
-            return;
-        }
-        buffer.items[buffer.length] = codepoint;
-        buffer.length += 1;
-    }
-
-    fn addUtf8(buffer: *CodepointBuffer, string: [:0]const u8) void {
-        var index: usize = 0;
-        while (index < string.len) {
-            const length = std.unicode.utf8ByteSequenceLength(string[index]) catch 1;
-            if (index + length > string.len) {
-                break;
-            }
-            const codepoint = std.unicode.utf8Decode(string[index .. index + length]) catch {
-                index += 1;
-                continue;
-            };
-            buffer.add(@intCast(codepoint));
-            index += length;
-        }
-    }
-};
-
-const used_codepoints = collecting: {
+const codepoints = collecting: {
     @setEvalBranchQuota(1_112_064);
 
-    var buffer = CodepointBuffer{};
+    const languages = std.enums.values(Language);
+    const keys = std.enums.values(TextKey);
 
-    var codepoint: i32 = 0x20;
-    while (codepoint <= 0x7E) : (codepoint += 1) {
-        buffer.add(codepoint);
+    var capacity: usize = 95;
+
+    for (languages) |language| {
+        capacity += language.label().len;
     }
 
-    for (std.enums.values(Language)) |lang| {
-        buffer.addUtf8(lang.label());
+    for (keys) |key| {
+        capacity += key.english().len + key.chinese().len;
     }
 
-    for (std.enums.values(TextKey)) |key| {
-        buffer.addUtf8(key.english());
-        buffer.addUtf8(key.chinese());
+    const Storage = struct {
+        items: [capacity]i32 = undefined,
+        length: usize = 0,
+
+        fn add(storage: *@This(), codepoint: i32) void {
+            for (storage.items[0..storage.length]) |existing| {
+                if (existing == codepoint) return;
+            }
+
+            storage.items[storage.length] = codepoint;
+            storage.length += 1;
+        }
+
+        fn addUtf8(storage: *@This(), string: []const u8) void {
+            var index: usize = 0;
+
+            while (index < string.len) {
+                const size = std.unicode.utf8ByteSequenceLength(string[index]) catch {
+                    index += 1;
+                    continue;
+                };
+
+                if (index + size > string.len) break;
+
+                const codepoint = std.unicode.utf8Decode(
+                    string[index .. index + size],
+                ) catch {
+                    index += 1;
+                    continue;
+                };
+
+                storage.add(@intCast(codepoint));
+                index += size;
+            }
+        }
+    };
+
+    var result = Storage{};
+
+    for (0x20..0x7F) |codepoint| {
+        result.add(@intCast(codepoint));
     }
 
-    break :collecting buffer;
+    for (languages) |language| {
+        result.addUtf8(language.label());
+    }
+
+    for (keys) |key| {
+        result.addUtf8(key.english());
+        result.addUtf8(key.chinese());
+    }
+
+    break :collecting result;
 };
 
 const Fonts = struct {
@@ -213,7 +220,7 @@ const Fonts = struct {
         const default = try rl.loadFontEx(
             "resources/fonts/ResourceHanRounded/CN/Heavy.ttf",
             atlas_size,
-            used_codepoints.items[0..used_codepoints.length],
+            codepoints.items[0..codepoints.length],
         );
         errdefer rl.unloadFont(default);
         return .{ .default = default };
@@ -317,16 +324,16 @@ const Player = enum {
 
 const Action = union(enum) {
     go: Screen,
-    choose_size: struct { size: c6.Size, next_screen: Screen },
+    choose_size: c6.Size,
     choose_black: Player,
     choose_white: Player,
 
     fn perform(action: Action, app: *App) void {
         switch (action) {
             .go => |screen| app.screen = screen,
-            .choose_size => |choice| {
-                app.size = choice.size;
-                app.screen = choice.next_screen;
+            .choose_size => |size| {
+                app.size = size;
+                app.screen = .select_black;
             },
             .choose_black => |player| {
                 app.black = player;
@@ -359,9 +366,9 @@ const App = struct {
     game: ?c6.Game = null,
     shake: ShakeAnimation = .{},
 
-    fn init(gpa: std.mem.Allocator) App {
+    fn init(allocator: std.mem.Allocator) App {
         return .{
-            .allocator = gpa,
+            .allocator = allocator,
             .colors = .init(),
         };
     }
@@ -375,10 +382,11 @@ const App = struct {
     fn main(app: *App) !void {
         rl.setConfigFlags(.{
             .msaa_4x_hint = true,
+            .vsync_hint = true,
             .window_resizable = true,
         });
 
-        rl.initWindow(1280, 720, window_title);
+        rl.initWindow(1280, 720, TextKey.title.get(.english));
         defer rl.closeWindow();
 
         rl.maximizeWindow();
@@ -423,8 +431,8 @@ const App = struct {
         const size = app.size orelse return c6.Error.InvalidSize;
         const new_game = try c6.Game.init(app.allocator, size);
 
-        if (app.game) |*previous| {
-            previous.deinit();
+        if (app.game) |*old_game| {
+            old_game.deinit();
         }
 
         app.game = new_game;
@@ -493,6 +501,7 @@ const Grid = struct {
     fn init(bounds: rl.Rectangle, rows: usize, columns: usize) Grid {
         std.debug.assert(rows > 0);
         std.debug.assert(columns > 0);
+
         return .{
             .bounds = bounds,
             .rows = rows,
@@ -500,9 +509,9 @@ const Grid = struct {
         };
     }
 
-    fn withSpacing(grid: Grid, gap_size: rl.Vector2) Grid {
+    fn withSpacing(grid: Grid, gap: rl.Vector2) Grid {
         var result = grid;
-        result.gap = gap_size;
+        result.gap = gap;
         return result;
     }
 
@@ -515,10 +524,8 @@ const Grid = struct {
         const row_index: f32 = @floatFromInt(row);
         const column_index: f32 = @floatFromInt(column);
 
-        const width =
-            (grid.bounds.width - grid.gap.x * (columns - 1)) / columns;
-        const height =
-            (grid.bounds.height - grid.gap.y * (rows - 1)) / rows;
+        const width = (grid.bounds.width - grid.gap.x * (columns - 1)) / columns;
+        const height = (grid.bounds.height - grid.gap.y * (rows - 1)) / rows;
 
         return .init(
             grid.bounds.x + column_index * (width + grid.gap.x),
@@ -534,7 +541,7 @@ const Text = struct {
     position: rl.Vector2 = .zero(),
     font_size: i32 = 22,
     tint: ?rl.Color = null,
-    typeface: ?rl.Font = null,
+    font: ?rl.Font = null,
 
     fn init(label: [:0]const u8) Text {
         return .{ .label = label };
@@ -546,34 +553,34 @@ const Text = struct {
         return result;
     }
 
-    fn withY(text: Text, y_pos: f32) Text {
+    fn withY(text: Text, y: f32) Text {
         var result = text;
-        result.position.y = y_pos;
+        result.position.y = y;
         return result;
     }
 
-    fn withSize(text: Text, size_px: i32) Text {
+    fn withSize(text: Text, font_size: i32) Text {
         var result = text;
-        result.font_size = size_px;
+        result.font_size = font_size;
         return result;
     }
 
-    fn withColor(text: Text, tint_value: rl.Color) Text {
+    fn withColor(text: Text, tint: rl.Color) Text {
         var result = text;
-        result.tint = tint_value;
+        result.tint = tint;
         return result;
     }
 
-    fn withFont(text: Text, face: rl.Font) Text {
+    fn withFont(text: Text, font: rl.Font) Text {
         var result = text;
-        result.typeface = face;
+        result.font = font;
         return result;
     }
 
     fn measure(text: Text, app: *const App) rl.Vector2 {
-        const face = text.typeface orelse app.fonts.default;
+        const font = text.font orelse app.fonts.default;
         return rl.measureTextEx(
-            face,
+            font,
             text.label,
             @floatFromInt(text.font_size),
             0,
@@ -581,10 +588,10 @@ const Text = struct {
     }
 
     fn draw(text: Text, app: *const App) void {
-        const face = text.typeface orelse app.fonts.default;
+        const font = text.font orelse app.fonts.default;
         const resolved = text.tint orelse app.colors.heading;
         rl.drawTextEx(
-            face,
+            font,
             text.label,
             text.position,
             @floatFromInt(text.font_size),
@@ -605,7 +612,7 @@ const Button = struct {
     const Variant = enum { default, primary };
 
     label: [:0]const u8,
-    rectangle: rl.Rectangle = .init(0, 0, 0, 0),
+    bounds: rl.Rectangle = .init(0, 0, 0, 0),
     enabled: bool = true,
     variant: Variant = .default,
 
@@ -613,9 +620,9 @@ const Button = struct {
         return .{ .label = label };
     }
 
-    fn withBounds(button: Button, rect: rl.Rectangle) Button {
+    fn withBounds(button: Button, bounds: rl.Rectangle) Button {
         var result = button;
-        result.rectangle = rect;
+        result.bounds = bounds;
         return result;
     }
 
@@ -632,7 +639,7 @@ const Button = struct {
     }
 
     fn hovered(button: Button, pointer: Pointer) bool {
-        return button.enabled and contains(button.rectangle, pointer.position);
+        return button.enabled and contains(button.bounds, pointer.position);
     }
 
     fn pressed(button: Button, pointer: Pointer) bool {
@@ -667,10 +674,10 @@ const Button = struct {
         const active = button.pressed(app.pointer);
 
         const face = rl.Rectangle.init(
-            button.rectangle.x,
-            button.rectangle.y + @as(f32, if (active) 2.0 else 0.0),
-            button.rectangle.width,
-            button.rectangle.height,
+            button.bounds.x,
+            button.bounds.y + @as(f32, if (active) 2.0 else 0.0),
+            button.bounds.width,
+            button.bounds.height,
         );
 
         rl.drawRectangleRounded(face, 1, 8, button.fillColor(app));
@@ -716,17 +723,18 @@ fn drawMenuScreen(app: *App, screen: MenuScreen) void {
     drawScreenTitle(app, screen.title, screen.title_size);
 
     const grid = Layout.menuGrid(app, screen.buttons.len);
-    for (screen.buttons, 0..) |b, i| {
-        var button = Button.init(b.label.get(app.language))
-            .withBounds(grid.cell(i, 0));
-        if (b.disabled) {
+
+    for (screen.buttons, 0..) |properties, index| {
+        var button = Button.init(properties.label.get(app.language))
+            .withBounds(grid.cell(index, 0));
+        if (properties.disabled) {
             button = button.withDisabled();
         }
-        if (b.primary) {
+        if (properties.primary) {
             button = button.withPrimary();
         }
         if (button.draw(app).clicked(app.pointer)) {
-            b.action.perform(app);
+            properties.action.perform(app);
         }
     }
 }
@@ -787,18 +795,13 @@ const SelectSize = struct {
         drawScreenTitle(app, .new_game, 36);
 
         const grid = Layout.menuGrid(app, labels.len);
-        for (labels, 0..) |label, i| {
+        for (labels, 0..) |label, index| {
             if (Button.init(label)
-                .withBounds(grid.cell(i, 0))
+                .withBounds(grid.cell(index, 0))
                 .draw(app)
                 .clicked(app.pointer))
             {
-                (Action{
-                    .choose_size = .{
-                        .size = sizes[i],
-                        .next_screen = .select_black,
-                    },
-                }).perform(app);
+                (Action{ .choose_size = sizes[index] }).perform(app);
             }
         }
 
@@ -869,16 +872,16 @@ const SelectLanguage = struct {
 
         const grid = Layout.menuGrid(app, options.len + 1);
 
-        for (options, 0..) |lang, i| {
-            var button = Button.init(lang.label())
-                .withBounds(grid.cell(i, 0));
+        for (options, 0..) |language, index| {
+            var button = Button.init(language.label())
+                .withBounds(grid.cell(index, 0));
 
-            if (app.language == lang) {
+            if (app.language == language) {
                 button = button.withPrimary();
             }
 
             if (button.draw(app).clicked(app.pointer)) {
-                app.language = lang;
+                app.language = language;
             }
         }
 
@@ -908,7 +911,7 @@ const Duel = struct {
     fn draw(app: *App) void {
         app.shake.update(app);
 
-        const game = if (app.game) |*g| g else return;
+        const game = if (app.game) |*game_maybe| game_maybe else return;
         const size = app.size orelse return;
 
         if (rl.isKeyPressed(.escape)) {
@@ -947,7 +950,7 @@ const Duel = struct {
     }
 
     fn drawBackControl(app: *App) void {
-        const rect = rl.Rectangle.init(
+        const bounds = rl.Rectangle.init(
             app.viewport.width - back_button_width - corner_pad,
             corner_pad,
             back_button_width,
@@ -955,7 +958,7 @@ const Duel = struct {
         );
 
         if (Button.init(TextKey.back.get(app.language))
-            .withBounds(rect)
+            .withBounds(bounds)
             .draw(app)
             .clicked(app.pointer))
         {
@@ -1018,7 +1021,7 @@ const Duel = struct {
         const y = app.viewport.height - button_height - corner_pad;
 
         for (buttons) |key| {
-            const rect = rl.Rectangle.init(
+            const bounds = rl.Rectangle.init(
                 x,
                 y,
                 button_width,
@@ -1026,7 +1029,7 @@ const Duel = struct {
             );
 
             if (Button.init(key.get(app.language))
-                .withBounds(rect)
+                .withBounds(bounds)
                 .draw(app)
                 .clicked(app.pointer))
             {
@@ -1100,13 +1103,11 @@ const BoardGeometry = struct {
     padding: f32,
 
     fn width(geometry: BoardGeometry) f32 {
-        return @as(f32, @floatFromInt(geometry.size.width - 1)) *
-            geometry.spacing;
+        return @as(f32, @floatFromInt(geometry.size.width - 1)) * geometry.spacing;
     }
 
     fn height(geometry: BoardGeometry) f32 {
-        return @as(f32, @floatFromInt(geometry.size.height - 1)) *
-            geometry.spacing;
+        return @as(f32, @floatFromInt(geometry.size.height - 1)) * geometry.spacing;
     }
 
     fn bounds(geometry: BoardGeometry) rl.Rectangle {
@@ -1120,10 +1121,8 @@ const BoardGeometry = struct {
 
     fn position(geometry: BoardGeometry, point: c6.Point) rl.Vector2 {
         return .init(
-            geometry.x +
-                @as(f32, @floatFromInt(point.column)) * geometry.spacing,
-            geometry.y +
-                @as(f32, @floatFromInt(point.row)) * geometry.spacing,
+            geometry.x + @as(f32, @floatFromInt(point.column)) * geometry.spacing,
+            geometry.y + @as(f32, @floatFromInt(point.row)) * geometry.spacing,
         );
     }
 
@@ -1189,8 +1188,8 @@ fn drawBoard(
 ) void {
     drawGrid(textures.grid, geometry.bounds(), geometry);
 
-    for (game.lines) |maybe_line| {
-        const line = maybe_line orelse continue;
+    for (game.lines) |line_maybe| {
+        const line = line_maybe orelse continue;
 
         rl.drawLineEx(
             geometry.position(line.start),
@@ -1253,19 +1252,18 @@ fn drawTextureCentered(
     size_px: f32,
     tint: rl.Color,
 ) void {
-    const tex_width: f32 = @floatFromInt(texture.width);
-    const tex_height: f32 = @floatFromInt(texture.height);
-
-    const scale = size_px / @max(tex_width, tex_height);
+    const width: f32 = @floatFromInt(texture.width);
+    const height: f32 = @floatFromInt(texture.height);
+    const scale = size_px / @max(width, height);
 
     rl.drawTexturePro(
         texture,
-        .init(0, 0, tex_width, tex_height),
+        .init(0, 0, width, height),
         .init(
-            center.x - tex_width * scale * 0.5,
-            center.y - tex_height * scale * 0.5,
-            tex_width * scale,
-            tex_height * scale,
+            center.x - width * scale * 0.5,
+            center.y - height * scale * 0.5,
+            width * scale,
+            height * scale,
         ),
         .zero(),
         0,
@@ -1275,21 +1273,21 @@ fn drawTextureCentered(
 
 fn drawGrid(
     texture: rl.Texture2D,
-    destination: rl.Rectangle,
+    bounds: rl.Rectangle,
     geometry: BoardGeometry,
 ) void {
-    const tex_width: f32 = @floatFromInt(texture.width);
-    const tex_height: f32 = @floatFromInt(texture.height);
+    const width: f32 = @floatFromInt(texture.width);
+    const height: f32 = @floatFromInt(texture.height);
 
     rl.drawTexturePro(
         texture,
         .init(
             0,
             0,
-            destination.width / geometry.spacing * tex_width,
-            destination.height / geometry.spacing * tex_height,
+            bounds.width / geometry.spacing * width,
+            bounds.height / geometry.spacing * height,
         ),
-        destination,
+        bounds,
         .zero(),
         0,
         .white,
