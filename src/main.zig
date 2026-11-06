@@ -68,6 +68,7 @@ const TextKey = enum {
     exit,
     back,
     undo,
+    redo,
     reset,
     human,
     ai,
@@ -99,6 +100,7 @@ const TextKey = enum {
             .exit => "Exit",
             .back => "Back",
             .undo => "Undo",
+            .redo => "Redo",
             .reset => "Reset",
             .human => "Human",
             .ai => "AI",
@@ -125,6 +127,7 @@ const TextKey = enum {
             .exit => "退出",
             .back => "返回",
             .undo => "悔棋",
+            .redo => "重做",
             .reset => "重开",
             .human => "人类",
             .ai => "电脑",
@@ -343,7 +346,7 @@ const Action = union(enum) {
                 app.white = player;
                 app.startGame() catch |err| {
                     std.log.err("StartGameError: {any}", .{err});
-                    app.screen = .select_size;
+                    app.screen = .main_menu;
                 };
             },
         }
@@ -365,6 +368,7 @@ const App = struct {
     white: ?Player = null,
     game: ?c6.Game = null,
     shake: ShakeAnimation = .{},
+    redo_stack: std.ArrayList(c6.Point) = .empty,
 
     fn init(allocator: std.mem.Allocator) App {
         return .{
@@ -377,6 +381,7 @@ const App = struct {
         if (app.game) |*game| {
             game.deinit();
         }
+        app.redo_stack.deinit(app.allocator);
     }
 
     fn main(app: *App) !void {
@@ -437,7 +442,44 @@ const App = struct {
 
         app.game = new_game;
         app.shake = .{};
+        app.redo_stack.clearRetainingCapacity();
         app.screen = .duel;
+    }
+
+    fn performUndo(app: *App, game: *c6.Game) void {
+        if (game.undo()) |point| {
+            app.redo_stack.append(app.allocator, point) catch |err| {
+                std.log.err("RedoStackAppendError: {any}", .{err});
+            };
+        }
+        app.shake = .{};
+    }
+
+    fn performRedo(app: *App, game: *c6.Game) void {
+        if (app.redo_stack.items.len == 0) return;
+
+        const point = app.redo_stack.items[app.redo_stack.items.len - 1];
+        game.play(point) catch |err| {
+            std.log.err("RedoPlayError: {any}, {any}", .{ point, err });
+            return;
+        };
+
+        _ = app.redo_stack.pop();
+        app.shake = .{};
+    }
+
+    fn performPlay(app: *App, game: *c6.Game, point: c6.Point) void {
+        game.play(point) catch |err| {
+            std.log.err("PlayPointError: {any}, {any}", .{ point, err });
+            return;
+        };
+        app.redo_stack.clearRetainingCapacity();
+    }
+
+    fn performReset(app: *App, game: *c6.Game) void {
+        game.reset();
+        app.redo_stack.clearRetainingCapacity();
+        app.shake = .{};
     }
 };
 
@@ -918,12 +960,13 @@ const Duel = struct {
             app.screen = .main_menu;
         }
         if (rl.isKeyPressed(.r)) {
-            game.reset();
-            app.shake = .{};
+            app.performReset(game);
+        }
+        if (rl.isKeyPressed(.y)) {
+            app.performRedo(game);
         }
         if (rl.isKeyPressed(.z)) {
-            _ = game.undo();
-            app.shake = .{};
+            app.performUndo(game);
         }
 
         drawStatus(app, game);
@@ -938,9 +981,7 @@ const Duel = struct {
                     if ((game.pieceAt(point) catch break :playing) != null) {
                         app.shake.trigger(point);
                     } else {
-                        game.play(point) catch |err| {
-                            std.log.err("PlayPointError: {any}, {any}", .{ point, err });
-                        };
+                        app.performPlay(game, point);
                     }
                 }
             }
@@ -1012,7 +1053,7 @@ const Duel = struct {
     }
 
     fn drawControls(app: *App, game: *c6.Game) void {
-        const buttons = [_]TextKey{ .undo, .reset };
+        const buttons = [_]TextKey{ .undo, .redo, .reset };
 
         const count: f32 = @floatFromInt(buttons.len);
         const total_width = count * button_width + (count - 1) * button_gap;
@@ -1028,20 +1069,22 @@ const Duel = struct {
                 button_height,
             );
 
-            if (Button.init(key.get(app.language))
-                .withBounds(bounds)
-                .draw(app)
-                .clicked(app.pointer))
-            {
+            var button = Button.init(key.get(app.language))
+                .withBounds(bounds);
+
+            if (key == .undo and !game.canUndo()) {
+                button = button.withDisabled();
+            }
+
+            if (key == .redo and app.redo_stack.items.len == 0) {
+                button = button.withDisabled();
+            }
+
+            if (button.draw(app).clicked(app.pointer)) {
                 switch (key) {
-                    .undo => {
-                        _ = game.undo();
-                        app.shake = .{};
-                    },
-                    .reset => {
-                        game.reset();
-                        app.shake = .{};
-                    },
+                    .undo => app.performUndo(game),
+                    .redo => app.performRedo(game),
+                    .reset => app.performReset(game),
                     else => unreachable,
                 }
             }
