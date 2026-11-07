@@ -165,7 +165,9 @@ const codepoints = collecting: {
 
         fn add(storage: *@This(), codepoint: i32) void {
             for (storage.items[0..storage.length]) |existing| {
-                if (existing == codepoint) return;
+                if (existing == codepoint) {
+                    return;
+                }
             }
 
             storage.items[storage.length] = codepoint;
@@ -181,7 +183,9 @@ const codepoints = collecting: {
                     continue;
                 };
 
-                if (index + size > string.len) break;
+                if (index + size > string.len) {
+                    break;
+                }
 
                 const codepoint = std.unicode.utf8Decode(
                     string[index .. index + size],
@@ -394,8 +398,8 @@ const App = struct {
         rl.initWindow(1280, 720, TextKey.title.get(.english));
         defer rl.closeWindow();
 
-        rl.maximizeWindow();
         rl.setExitKey(.null);
+        rl.maximizeWindow();
 
         app.fonts = try Fonts.init();
         defer app.fonts.deinit();
@@ -426,8 +430,8 @@ const App = struct {
             .select_black => SelectBlack.draw(app),
             .select_white => SelectWhite.draw(app),
             .duel => Duel.draw(app),
-            .credits => Credits.draw(app),
             .select_language => SelectLanguage.draw(app),
+            .credits => Credits.draw(app),
             .exit => unreachable,
         }
     }
@@ -456,16 +460,14 @@ const App = struct {
     }
 
     fn performRedo(app: *App, game: *c6.Game) void {
-        if (app.redo_stack.items.len == 0) return;
-
-        const point = app.redo_stack.items[app.redo_stack.items.len - 1];
-        game.play(point) catch |err| {
-            std.log.err("RedoPlayError: {any}, {any}", .{ point, err });
-            return;
-        };
-
-        _ = app.redo_stack.pop();
-        app.shake = .{};
+        if (app.redo_stack.getLastOrNull()) |point| {
+            game.play(point) catch |err| {
+                std.log.err("RedoPlayError: {any}, {any}", .{ point, err });
+                return;
+            };
+            _ = app.redo_stack.pop();
+            app.shake = .{};
+        }
     }
 
     fn performPlay(app: *App, game: *c6.Game, point: c6.Point) void {
@@ -789,7 +791,12 @@ fn drawScreenTitle(app: *const App, text: TextKey, size_px: i32) void {
 }
 
 fn drawBackButton(app: *App, action: Action) void {
+    if (rl.isKeyPressed(.escape)) {
+        action.perform(app);
+    }
+
     const grid = Layout.backGrid(app);
+
     if (Button.init(TextKey.back.get(app.language))
         .withBounds(grid.cell(0, 0))
         .draw(app)
@@ -862,6 +869,10 @@ const select_black_screen = MenuScreen{
 
 const SelectBlack = struct {
     fn draw(app: *App) void {
+        if (rl.isKeyPressed(.escape)) {
+            app.screen = .select_size;
+        }
+
         drawMenuScreen(app, select_black_screen);
     }
 };
@@ -877,7 +888,47 @@ const select_white_screen = MenuScreen{
 
 const SelectWhite = struct {
     fn draw(app: *App) void {
+        if (rl.isKeyPressed(.escape)) {
+            app.screen = .select_black;
+        }
+
         drawMenuScreen(app, select_white_screen);
+    }
+};
+
+const SelectLanguage = struct {
+    const options = std.enums.values(Language);
+
+    fn draw(app: *App) void {
+        if (rl.isKeyPressed(.escape)) {
+            app.screen = .main_menu;
+        }
+
+        drawScreenTitle(app, .language, 36);
+
+        const grid = Layout.menuGrid(app, options.len + 1);
+
+        for (options, 0..) |language, index| {
+            var button = Button.init(language.label())
+                .withBounds(grid.cell(index, 0));
+
+            if (app.language == language) {
+                button = button.withPrimary();
+            }
+
+            if (button.draw(app).clicked(app.pointer)) {
+                app.language = language;
+                rl.setWindowTitle(TextKey.title.get(language));
+            }
+        }
+
+        if (Button.init(TextKey.back.get(app.language))
+            .withBounds(grid.cell(options.len, 0))
+            .draw(app)
+            .clicked(app.pointer))
+        {
+            app.screen = .main_menu;
+        }
     }
 };
 
@@ -906,37 +957,6 @@ const Credits = struct {
     }
 };
 
-const SelectLanguage = struct {
-    const options = std.enums.values(Language);
-
-    fn draw(app: *App) void {
-        drawScreenTitle(app, .language, 36);
-
-        const grid = Layout.menuGrid(app, options.len + 1);
-
-        for (options, 0..) |language, index| {
-            var button = Button.init(language.label())
-                .withBounds(grid.cell(index, 0));
-
-            if (app.language == language) {
-                button = button.withPrimary();
-            }
-
-            if (button.draw(app).clicked(app.pointer)) {
-                app.language = language;
-            }
-        }
-
-        if (Button.init(TextKey.back.get(app.language))
-            .withBounds(grid.cell(options.len, 0))
-            .draw(app)
-            .clicked(app.pointer))
-        {
-            app.screen = .main_menu;
-        }
-    }
-};
-
 const Duel = struct {
     const button_width: f32 = 100;
     const button_height: f32 = 48;
@@ -951,22 +971,22 @@ const Duel = struct {
     const footer_height: f32 = button_height + corner_pad * 2;
 
     fn draw(app: *App) void {
-        app.shake.update(app);
-
         const game = if (app.game) |*game_maybe| game_maybe else return;
         const size = app.size orelse return;
+
+        app.shake.update(app);
 
         if (rl.isKeyPressed(.escape)) {
             app.screen = .main_menu;
         }
-        if (rl.isKeyPressed(.r)) {
-            app.performReset(game);
-        }
-        if (rl.isKeyPressed(.y)) {
-            app.performRedo(game);
-        }
         if (rl.isKeyPressed(.z)) {
             app.performUndo(game);
+        }
+        if (rl.isKeyPressed(.x)) {
+            app.performRedo(game);
+        }
+        if (rl.isKeyPressed(.c)) {
+            app.performReset(game);
         }
 
         drawStatus(app, game);
