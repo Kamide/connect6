@@ -36,7 +36,7 @@ jobs:
           version: 0.17.0
 
       - name: Build
-        run: zig build -Dtarget=wasm32-emscripten
+        run: zig build -Dtarget=wasm32-emscripten -Doptimize=ReleaseFast
 
       - name: Setup Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
