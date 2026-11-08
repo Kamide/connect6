@@ -3,7 +3,7 @@
     <ZigBrainsOption name="workingDirectory" value="$PROJECT_DIR$" />
     <envs />
     <ZigBrainsOption name="buildSteps" value="run" />
-    <ZigBrainsOption name="compilerArgs" value="-Dtarget=wasm32-emscripten run" />
+    <ZigBrainsOption name="compilerArgs" value="-Dtarget=wasm32-emscripten" />
     <ZigBrainsOption name="debugBuildSteps" value="" />
     <ZigBrainsOption name="debugCompilerArgs" value="" />
     <ZigBrainsOption name="exePath" value="" />
