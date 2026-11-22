@@ -434,7 +434,9 @@ const AiJob = struct {
     }
 
     fn invalidate(job: *AiJob) void {
-        if (job.active) job.discard_result = true;
+        if (job.active) {
+            job.discard_result = true;
+        }
     }
 
     fn cancel(job: *AiJob) void {
@@ -586,14 +588,14 @@ const App = struct {
 
         if (count == 0) {
             app.ai_think_timer = 0.25 + random.float(f32) * 0.25;
-        } else if (c6.isOdd((count - 1) / 2)) {
+        } else if (c6.isOdd(count)) {
             app.ai_think_timer = 0.25 + random.float(f32) * 1;
 
             if (random.float(f32) < 0.25) {
                 app.ai_think_timer += 0.5 + random.float(f32) * 0.5;
             }
         } else {
-            app.ai_think_timer = 0.125 + random.float(f32) * 0.5;
+            app.ai_think_timer = 0.25 + random.float(f32) * 0.5;
         }
 
         app.ai_hover_timer = 0.0;
@@ -643,7 +645,9 @@ const App = struct {
 
         const fallbacks = [_]ThinkingRegion{ .adjacent, .nearby, .distant, .any };
         for (fallbacks) |region| {
-            if (region == preferred) continue;
+            if (region == preferred) {
+                continue;
+            }
             if (app.randomEmptyPointInRegion(game, size, region, avoid)) |point| {
                 return point;
             }
@@ -666,7 +670,9 @@ const App = struct {
         for (0..size.height) |row| {
             for (0..size.width) |column| {
                 const point = c6.Point.init(row, column);
-                if ((game.pieceAt(point) catch continue) != null) continue;
+                if ((game.pieceAt(point) catch continue) != null) {
+                    continue;
+                }
 
                 if (avoid) |previous| {
                     if (point.row == previous.row and point.column == previous.column) {
@@ -683,7 +689,9 @@ const App = struct {
                     .distant => !nearby,
                     .any => true,
                 };
-                if (!matches) continue;
+                if (!matches) {
+                    continue;
+                }
 
                 seen += 1;
                 if (random.uintLessThan(usize, seen) == 0) {
@@ -710,7 +718,9 @@ const App = struct {
         while (row <= row_end) : (row += 1) {
             var column = column_start;
             while (column <= column_end) : (column += 1) {
-                if (row == point.row and column == point.column) continue;
+                if (row == point.row and column == point.column) {
+                    continue;
+                }
 
                 const neighbor = c6.Point.init(row, column);
                 if ((game.pieceAt(neighbor) catch continue) != null) {
@@ -1300,7 +1310,7 @@ const Duel = struct {
                 if (!app.ai_move_revealed) {
                     app.ai_hover_point = move;
                     app.ai_move_revealed = true;
-                    app.ai_reveal_timer = 0.28;
+                    app.ai_reveal_timer = 0.3;
                 } else {
                     app.ai_reveal_timer = @max(
                         0.0,
@@ -1626,8 +1636,8 @@ fn drawBoard(
     textures: *const Textures,
     geometry: BoardGeometry,
     app: *const App,
-    show_hover: bool,
-    ai_hover: ?c6.Point,
+    match_pointer_hover: bool,
+    ai_hover_point: ?c6.Point,
 ) void {
     drawGrid(textures.grid, geometry.bounds(), geometry);
 
@@ -1673,17 +1683,17 @@ fn drawBoard(
         );
     }
 
-    const hover_point = if (show_hover)
+    const hover_point_maybe = if (match_pointer_hover)
         geometry.mouseToPoint(app.pointer.position)
     else
-        ai_hover;
+        ai_hover_point;
 
-    if (hover_point) |point| {
+    if (hover_point_maybe) |hover_point| {
         drawing: {
-            if ((game.pieceAt(point) catch break :drawing) == null) {
+            if ((game.pieceAt(hover_point) catch break :drawing) == null) {
                 drawTextureCentered(
                     textures.stone(game.currentPlayer()),
-                    geometry.position(point),
+                    geometry.position(hover_point),
                     geometry.spacing,
                     app.colors.highlight,
                 );

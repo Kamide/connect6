@@ -215,35 +215,35 @@ fn evaluate(
             for (0..game.size.width) |column| {
                 const point = c6.Point.init(row, column);
                 const piece = game.pieceAtUnchecked(point) orelse continue;
-                const before = point.offsetOrNull(game.size, backward);
+                const before_point_maybe = point.offsetOrNull(game.size, backward);
 
-                if (before) |before_point| {
+                if (before_point_maybe) |before_point| {
                     if (game.pieceAtUnchecked(before_point) == piece) {
                         continue;
                     }
                 }
 
                 var length: usize = 0;
-                var cursor: ?c6.Point = point;
+                var after_point_maybe: ?c6.Point = point;
 
-                while (cursor) |cursor_point| {
-                    if (game.pieceAtUnchecked(cursor_point) != piece) {
+                while (after_point_maybe) |after_point| {
+                    if (game.pieceAtUnchecked(after_point) != piece) {
                         break;
                     }
 
                     length += 1;
-                    cursor = cursor_point.offsetOrNull(game.size, forward);
+                    after_point_maybe = after_point.offsetOrNull(game.size, forward);
                 }
 
                 var open: usize = 0;
 
-                if (before) |before_point| {
+                if (before_point_maybe) |before_point| {
                     if (game.pieceAtUnchecked(before_point) == null) {
                         open += 1;
                     }
                 }
 
-                if (cursor) |after_point| {
+                if (after_point_maybe) |after_point| {
                     if (game.pieceAtUnchecked(after_point) == null) {
                         open += 1;
                     }
