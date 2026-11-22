@@ -45,6 +45,33 @@ pub fn deinit(game: *Game) void {
     game.allocator.free(game.pieces);
 }
 
+pub fn deinitPointer(game: *Game) void {
+    game.deinit();
+    game.allocator.destroy(game);
+}
+
+pub fn clone(game: *const Game, allocator: Allocator) !Game {
+    var points = try game.points.clone(allocator);
+    errdefer points.deinit(allocator);
+
+    const pieces = try allocator.dupe(?Piece, game.pieces);
+    errdefer allocator.free(pieces);
+
+    var copy = game.*;
+    copy.allocator = allocator;
+    copy.points = points;
+    copy.pieces = pieces;
+    return copy;
+}
+
+pub fn clonePointer(game: *const Game, allocator: Allocator) !*Game {
+    const copy = try allocator.create(Game);
+    errdefer allocator.destroy(copy);
+
+    copy.* = try game.clone(allocator);
+    return copy;
+}
+
 pub fn reset(game: *Game) void {
     game.points.clearRetainingCapacity();
     @memset(game.pieces, null);
@@ -146,13 +173,17 @@ fn terminalPoint(
     return current;
 }
 
-fn pieceAtUnchecked(game: *const Game, point: Point) ?Piece {
+pub fn pieceAtUnchecked(game: *const Game, point: Point) ?Piece {
     return game.pieces[point.rowMajorIndexUnchecked(game.size)];
 }
 
 pub fn pieceAt(game: *const Game, point: Point) !?Piece {
     const index = try point.rowMajorIndex(game.size);
     return game.pieces[index];
+}
+
+pub fn isEmpty(game: *const Game) bool {
+    return game.piecesPlayed() == 0;
 }
 
 pub fn canUndo(game: *const Game) bool {

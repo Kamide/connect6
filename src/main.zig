@@ -2,11 +2,15 @@ const std = @import("std");
 const builtin = @import("builtin");
 const rl = @import("raylib");
 const c6 = @import("connect6");
+const Ai = @import("Ai.zig");
 
 const is_wasm = builtin.cpu.arch == .wasm32 or builtin.cpu.arch == .wasm64;
 
 pub fn main(init: std.process.Init) !void {
-    var app = App.init(init.gpa);
+    var seed: u64 = undefined;
+    init.io.random(std.mem.asBytes(&seed));
+
+    var app = App.init(init.gpa, seed);
     defer app.deinit();
     try app.main();
 }
@@ -72,7 +76,8 @@ const TextKey = enum {
     reset,
     human,
     ai,
-    author,
+    original_author,
+    programmer,
     graphics,
     font,
     black_wins,
@@ -104,7 +109,8 @@ const TextKey = enum {
             .reset => "Reset",
             .human => "Human",
             .ai => "AI",
-            .author => "Author: Kangming Deng",
+            .original_author => "Original Author: I-Chen Wu",
+            .programmer => "Programmer: Kangming Deng",
             .graphics => "Graphics: raylib",
             .font => "Font: Resource Han Rounded",
             .black_wins => "Black Wins!",
@@ -131,7 +137,8 @@ const TextKey = enum {
             .reset => "重开",
             .human => "人类",
             .ai => "电脑",
-            .author => "作者：邓康明",
+            .original_author => "原作者：吴毅成",
+            .programmer => "编程：邓康明",
             .graphics => "图形：raylib",
             .font => "字体：资源圆体",
             .black_wins => "黑方获胜！",
@@ -357,9 +364,100 @@ const Action = union(enum) {
     }
 };
 
+const AiJob = struct {
+    thread: ?std.Thread = null,
+    active: bool = false,
+    done: std.atomic.Value(bool) = .init(true),
+    result: c6.Point = undefined,
+    ok: bool = false,
+    discard_result: bool = false,
+    snapshot: ?*c6.Game = null,
+
+    fn start(job: *AiJob, ai: *Ai, game: *const c6.Game) !void {
+        std.debug.assert(!job.active);
+
+        const snapshot = try game.clonePointer(game.allocator);
+        errdefer snapshot.deinitPointer();
+
+        job.snapshot = snapshot;
+        job.discard_result = false;
+        job.done.store(false, .release);
+        job.ok = false;
+        job.active = true;
+
+        if (comptime is_wasm) {
+            dispatch(job, ai, snapshot);
+            return;
+        }
+
+        job.thread = std.Thread.spawn(
+            .{},
+            dispatch,
+            .{ job, ai, snapshot },
+        ) catch |err| {
+            job.active = false;
+            job.snapshot = null;
+            return err;
+        };
+    }
+
+    fn dispatch(job: *AiJob, ai: *Ai, game: *c6.Game) void {
+        if (ai.chooseMove(game)) |point| {
+            job.result = point;
+            job.ok = true;
+        } else |_| {
+            job.ok = false;
+        }
+
+        job.done.store(true, .release);
+    }
+
+    fn poll(job: *AiJob) ?c6.Point {
+        if (!job.active or !job.done.load(.acquire)) {
+            return null;
+        }
+
+        if (job.thread) |thread| {
+            thread.join();
+            job.thread = null;
+        }
+
+        if (job.snapshot) |snapshot| {
+            snapshot.deinitPointer();
+            job.snapshot = null;
+        }
+
+        const result = if (!job.discard_result and job.ok) job.result else null;
+        job.active = false;
+        job.discard_result = false;
+        return result;
+    }
+
+    fn invalidate(job: *AiJob) void {
+        if (job.active) job.discard_result = true;
+    }
+
+    fn cancel(job: *AiJob) void {
+        if (job.thread) |thread| {
+            thread.join();
+            job.thread = null;
+        }
+
+        if (job.snapshot) |snapshot| {
+            snapshot.deinitPointer();
+            job.snapshot = null;
+        }
+
+        job.active = false;
+        job.discard_result = false;
+        job.done.store(true, .release);
+    }
+};
+
 const App = struct {
     allocator: std.mem.Allocator,
     colors: Colors,
+    prng: std.Random.DefaultPrng,
     fonts: Fonts = undefined,
     textures: Textures = undefined,
     viewport: rl.Rectangle = .init(0, 0, 0, 0),
@@ -371,17 +469,27 @@ const App = struct {
     black: ?Player = null,
     white: ?Player = null,
     game: ?c6.Game = null,
+    ai: ?Ai = null,
+    ai_job: AiJob = .{},
+    ai_pending_move: ?c6.Point = null,
+    ai_move_revealed: bool = false,
+    ai_reveal_timer: f32 = 0.0,
+    ai_think_timer: f32 = 0.0,
+    ai_hover_timer: f32 = 0.0,
+    ai_hover_point: ?c6.Point = null,
     shake: ShakeAnimation = .{},
     redo_stack: std.ArrayList(c6.Point) = .empty,
 
-    fn init(allocator: std.mem.Allocator) App {
+    fn init(allocator: std.mem.Allocator, seed: u64) App {
         return .{
             .allocator = allocator,
             .colors = .init(),
+            .prng = .init(seed),
         };
     }
 
     fn deinit(app: *App) void {
+        app.ai_job.cancel();
         if (app.game) |*game| {
             game.deinit();
         }
@@ -437,6 +545,8 @@ const App = struct {
     }
 
     fn startGame(app: *App) !void {
+        app.cancelAiTurn();
+
         const size = app.size orelse return c6.Error.InvalidSize;
         const new_game = try c6.Game.init(app.allocator, size);
 
@@ -447,11 +557,174 @@ const App = struct {
         app.game = new_game;
         app.shake = .{};
         app.redo_stack.clearRetainingCapacity();
+
+        const black_is_ai = if (app.black) |player| player == .ai else false;
+        const white_is_ai = if (app.white) |player| player == .ai else false;
+
+        if (black_is_ai or white_is_ai) {
+            const random = app.prng.random();
+            const seed = random.int(u64);
+            const temperature = 0.05 + random.float(f64) * 0.15;
+            app.ai = .init(app.allocator, seed, temperature);
+        } else {
+            app.ai = null;
+        }
+
         app.screen = .duel;
     }
 
-    fn performUndo(app: *App, game: *c6.Game) void {
+    const ThinkingRegion = enum {
+        adjacent,
+        nearby,
+        distant,
+        any,
+    };
+
+    fn beginAiThinking(app: *App, game: *const c6.Game, size: c6.Size) void {
+        const random = app.prng.random();
+        const count = game.piecesPlayed();
+
+        if (count == 0) {
+            app.ai_think_timer = 0.25 + random.float(f32) * 0.25;
+        } else if (c6.isOdd((count - 1) / 2)) {
+            app.ai_think_timer = 0.25 + random.float(f32) * 1;
+
+            if (random.float(f32) < 0.25) {
+                app.ai_think_timer += 0.5 + random.float(f32) * 0.5;
+            }
+        } else {
+            app.ai_think_timer = 0.125 + random.float(f32) * 0.5;
+        }
+
+        app.ai_hover_timer = 0.0;
+        app.ai_hover_point = app.randomThinkingPoint(game, size, null);
+    }
+
+    fn updateAiThinking(app: *App, game: *const c6.Game, size: c6.Size) void {
+        app.ai_think_timer = @max(0.0, app.ai_think_timer - app.frame_time);
+        app.ai_hover_timer -= app.frame_time;
+
+        if (app.ai_hover_timer <= 0.0) {
+            app.ai_hover_point = app.randomThinkingPoint(
+                game,
+                size,
+                app.ai_hover_point,
+            );
+
+            const random = app.prng.random();
+
+            app.ai_hover_timer = 0.10 + random.float(f32) * 0.15;
+
+            if (random.float(f32) < 0.15) {
+                app.ai_hover_timer += 0.20 + random.float(f32) * 0.35;
+            }
+        }
+    }
+
+    fn randomThinkingPoint(
+        app: *App,
+        game: *const c6.Game,
+        size: c6.Size,
+        avoid: ?c6.Point,
+    ) ?c6.Point {
+        const random = app.prng.random();
+        const roll = random.float(f32);
+
+        const preferred: ThinkingRegion = if (roll < 0.4)
+            .adjacent
+        else if (roll < 0.8)
+            .nearby
+        else
+            .distant;
+
+        if (app.randomEmptyPointInRegion(game, size, preferred, avoid)) |point| {
+            return point;
+        }
+
+        const fallbacks = [_]ThinkingRegion{ .adjacent, .nearby, .distant, .any };
+        for (fallbacks) |region| {
+            if (region == preferred) continue;
+            if (app.randomEmptyPointInRegion(game, size, region, avoid)) |point| {
+                return point;
+            }
+        }
+
+        return app.randomEmptyPointInRegion(game, size, .any, null);
+    }
+
+    fn randomEmptyPointInRegion(
+        app: *App,
+        game: *const c6.Game,
+        size: c6.Size,
+        region: ThinkingRegion,
+        avoid: ?c6.Point,
+    ) ?c6.Point {
+        var selected: ?c6.Point = null;
+        var seen: usize = 0;
+        const random = app.prng.random();
+
+        for (0..size.height) |row| {
+            for (0..size.width) |column| {
+                const point = c6.Point.init(row, column);
+                if ((game.pieceAt(point) catch continue) != null) continue;
+
+                if (avoid) |previous| {
+                    if (point.row == previous.row and point.column == previous.column) {
+                        continue;
+                    }
+                }
+
+                const adjacent = hasOccupiedNeighbor(game, size, point, 1);
+                const nearby = adjacent or hasOccupiedNeighbor(game, size, point, 2);
+
+                const matches = switch (region) {
+                    .adjacent => adjacent,
+                    .nearby => nearby and !adjacent,
+                    .distant => !nearby,
+                    .any => true,
+                };
+                if (!matches) continue;
+
+                seen += 1;
+                if (random.uintLessThan(usize, seen) == 0) {
+                    selected = point;
+                }
+            }
+        }
+
+        return selected;
+    }
+
+    fn hasOccupiedNeighbor(
+        game: *const c6.Game,
+        size: c6.Size,
+        point: c6.Point,
+        radius: usize,
+    ) bool {
+        const row_start = if (point.row >= radius) point.row - radius else 0;
+        const column_start = if (point.column >= radius) point.column - radius else 0;
+        const row_end = @min(point.row + radius, size.height - 1);
+        const column_end = @min(point.column + radius, size.width - 1);
+
+        var row = row_start;
+        while (row <= row_end) : (row += 1) {
+            var column = column_start;
+            while (column <= column_end) : (column += 1) {
+                if (row == point.row and column == point.column) continue;
+
+                const neighbor = c6.Point.init(row, column);
+                if ((game.pieceAt(neighbor) catch continue) != null) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    fn undo(app: *App, game: *c6.Game) void {
         if (game.undo()) |point| {
+            app.invalidateAiTurn();
             app.redo_stack.append(app.allocator, point) catch |err| {
                 std.log.err("RedoStackAppendError: {any}", .{err});
             };
@@ -459,7 +732,8 @@ const App = struct {
         app.shake = .{};
     }
 
-    fn performRedo(app: *App, game: *c6.Game) void {
+    fn redo(app: *App, game: *c6.Game) void {
+        app.invalidateAiTurn();
         if (app.redo_stack.getLastOrNull()) |point| {
             game.play(point) catch |err| {
                 std.log.err("RedoPlayError: {any}, {any}", .{ point, err });
@@ -470,7 +744,8 @@ const App = struct {
         }
     }
 
-    fn performPlay(app: *App, game: *c6.Game, point: c6.Point) void {
+    fn play(app: *App, game: *c6.Game, point: c6.Point) void {
+        app.invalidateAiTurn();
         game.play(point) catch |err| {
             std.log.err("PlayPointError: {any}, {any}", .{ point, err });
             return;
@@ -478,10 +753,30 @@ const App = struct {
         app.redo_stack.clearRetainingCapacity();
     }
 
-    fn performReset(app: *App, game: *c6.Game) void {
+    fn reset(app: *App, game: *c6.Game) void {
+        app.invalidateAiTurn();
         game.reset();
         app.redo_stack.clearRetainingCapacity();
         app.shake = .{};
+    }
+
+    fn resetAiState(app: *App) void {
+        app.ai_pending_move = null;
+        app.ai_move_revealed = false;
+        app.ai_reveal_timer = 0.0;
+        app.ai_think_timer = 0.0;
+        app.ai_hover_timer = 0.0;
+        app.ai_hover_point = null;
+    }
+
+    fn invalidateAiTurn(app: *App) void {
+        app.ai_job.invalidate();
+        app.resetAiState();
+    }
+
+    fn cancelAiTurn(app: *App) void {
+        app.ai_job.cancel();
+        app.resetAiState();
     }
 };
 
@@ -862,7 +1157,7 @@ const select_black_screen = MenuScreen{
     .title = .black_player,
     .buttons = &.{
         .{ .label = .human, .action = .{ .choose_black = .human } },
-        .{ .label = .ai, .action = .{ .choose_black = .ai }, .disabled = true },
+        .{ .label = .ai, .action = .{ .choose_black = .ai } },
         .{ .label = .back, .action = .{ .go = .select_size } },
     },
 };
@@ -881,7 +1176,7 @@ const select_white_screen = MenuScreen{
     .title = .white_player,
     .buttons = &.{
         .{ .label = .human, .action = .{ .choose_white = .human } },
-        .{ .label = .ai, .action = .{ .choose_white = .ai }, .disabled = true },
+        .{ .label = .ai, .action = .{ .choose_white = .ai } },
         .{ .label = .back, .action = .{ .go = .select_black } },
     },
 };
@@ -936,19 +1231,24 @@ const Credits = struct {
     fn draw(app: *App) void {
         drawScreenTitle(app, .credits, 36);
 
-        Text.init(TextKey.author.get(app.language))
+        Text.init(TextKey.original_author.get(app.language))
             .withY(app.viewport.height * 0.42)
             .withSize(30)
             .drawCentered(app);
 
-        Text.init(TextKey.graphics.get(app.language))
+        Text.init(TextKey.programmer.get(app.language))
             .withY(app.viewport.height * 0.48)
+            .withSize(30)
+            .drawCentered(app);
+
+        Text.init(TextKey.graphics.get(app.language))
+            .withY(app.viewport.height * 0.54)
             .withSize(30)
             .withColor(app.colors.subtitle)
             .drawCentered(app);
 
         Text.init(TextKey.font.get(app.language))
-            .withY(app.viewport.height * 0.54)
+            .withY(app.viewport.height * 0.60)
             .withSize(30)
             .withColor(app.colors.subtitle)
             .drawCentered(app);
@@ -977,40 +1277,114 @@ const Duel = struct {
         app.shake.update(app);
 
         if (rl.isKeyPressed(.escape)) {
+            app.cancelAiTurn();
             app.screen = .main_menu;
         }
-        if (rl.isKeyPressed(.z)) {
-            app.performUndo(game);
-        }
-        if (rl.isKeyPressed(.x)) {
-            app.performRedo(game);
-        }
-        if (rl.isKeyPressed(.c)) {
-            app.performReset(game);
+
+        if (!app.ai_job.discard_result and
+            (app.ai_job.active or
+                (app.ai_pending_move != null and
+                    app.ai_think_timer > 0.0)))
+        {
+            app.updateAiThinking(game, size);
         }
 
-        drawStatus(app, game);
-        drawBackControl(app);
-        drawControls(app, game);
+        if (app.ai_job.poll()) |move| {
+            app.ai_pending_move = move;
+            app.ai_move_revealed = false;
+            app.ai_reveal_timer = 0.0;
+        }
 
-        const geometry = calculateBoardGeometry(app, size);
+        if (app.ai_pending_move) |move| {
+            if (app.ai_think_timer <= 0.0) {
+                if (!app.ai_move_revealed) {
+                    app.ai_hover_point = move;
+                    app.ai_move_revealed = true;
+                    app.ai_reveal_timer = 0.28;
+                } else {
+                    app.ai_reveal_timer = @max(
+                        0.0,
+                        app.ai_reveal_timer - app.frame_time,
+                    );
 
-        if (!game.isOver() and app.pointer.pressed) {
-            if (geometry.mouseToPoint(app.pointer.position)) |point| {
-                playing: {
-                    if ((game.pieceAt(point) catch break :playing) != null) {
-                        app.shake.trigger(point);
-                    } else {
-                        app.performPlay(game, point);
+                    if (app.ai_reveal_timer == 0.0) {
+                        game.play(move) catch |err| {
+                            std.log.err("AiPlayError: {any}, {any}", .{ move, err });
+                        };
+
+                        app.redo_stack.clearRetainingCapacity();
+                        app.ai_pending_move = null;
+                        app.ai_move_revealed = false;
+                        app.ai_hover_point = null;
                     }
                 }
             }
         }
 
-        drawBoard(game, &app.textures, geometry, app);
+        const over = game.isOver();
+        const ai_turn = !over and isAiTurn(app, game);
+
+        if (ai_turn and
+            !app.ai_job.active and
+            app.ai_pending_move == null and
+            app.redo_stack.items.len == 0)
+        {
+            if (app.ai) |*ai| {
+                app.ai_job.start(ai, game) catch |err| {
+                    std.log.err("AiStartError: {any}", .{err});
+                };
+                if (app.ai_job.active) {
+                    app.beginAiThinking(game, size);
+                }
+            }
+        }
+
+        const busy = app.ai_job.active or app.ai_pending_move != null;
+        const human_turn = !over and !ai_turn and !busy;
+
+        if (game.canUndo() and rl.isKeyPressed(.z)) {
+            app.undo(game);
+        }
+        if (!busy and rl.isKeyPressed(.x)) {
+            app.redo(game);
+        }
+        if (rl.isKeyPressed(.c)) {
+            app.reset(game);
+        }
+
+        drawStatus(app, game);
+
+        if (drawBackControl(app)) {
+            return;
+        }
+
+        drawControls(app, game, busy);
+
+        const geometry = calculateBoardGeometry(app, size);
+
+        if (human_turn and app.pointer.pressed) {
+            if (geometry.mouseToPoint(app.pointer.position)) |point| {
+                playing: {
+                    if ((game.pieceAt(point) catch break :playing) != null) {
+                        app.shake.trigger(point);
+                    } else {
+                        app.play(game, point);
+                    }
+                }
+            }
+        }
+
+        drawBoard(game, &app.textures, geometry, app, human_turn, app.ai_hover_point);
     }
 
-    fn drawBackControl(app: *App) void {
+    fn isAiTurn(app: *const App, game: *const c6.Game) bool {
+        return switch (game.currentPlayer()) {
+            .black => (app.black orelse .human) == .ai,
+            .white => (app.white orelse .human) == .ai,
+        };
+    }
+
+    fn drawBackControl(app: *App) bool {
         const bounds = rl.Rectangle.init(
             app.viewport.width - back_button_width - corner_pad,
             corner_pad,
@@ -1023,8 +1397,12 @@ const Duel = struct {
             .draw(app)
             .clicked(app.pointer))
         {
+            app.cancelAiTurn();
             app.screen = .main_menu;
+            return true;
         }
+
+        return false;
     }
 
     fn statusString(game: *const c6.Game) TextKey {
@@ -1072,7 +1450,7 @@ const Duel = struct {
         }
     }
 
-    fn drawControls(app: *App, game: *c6.Game) void {
+    fn drawControls(app: *App, game: *c6.Game, busy: bool) void {
         const buttons = [_]TextKey{ .undo, .redo, .reset };
 
         const count: f32 = @floatFromInt(buttons.len);
@@ -1096,15 +1474,15 @@ const Duel = struct {
                 button = button.withDisabled();
             }
 
-            if (key == .redo and app.redo_stack.items.len == 0) {
+            if (key == .redo and (busy or app.redo_stack.items.len == 0)) {
                 button = button.withDisabled();
             }
 
             if (button.draw(app).clicked(app.pointer)) {
                 switch (key) {
-                    .undo => app.performUndo(game),
-                    .redo => app.performRedo(game),
-                    .reset => app.performReset(game),
+                    .undo => app.undo(game),
+                    .redo => app.redo(game),
+                    .reset => app.reset(game),
                     else => unreachable,
                 }
             }
@@ -1248,6 +1626,8 @@ fn drawBoard(
     textures: *const Textures,
     geometry: BoardGeometry,
     app: *const App,
+    show_hover: bool,
+    ai_hover: ?c6.Point,
 ) void {
     drawGrid(textures.grid, geometry.bounds(), geometry);
 
@@ -1293,17 +1673,20 @@ fn drawBoard(
         );
     }
 
-    if (!game.isOver()) {
-        if (geometry.mouseToPoint(app.pointer.position)) |point| {
-            drawing: {
-                if ((game.pieceAt(point) catch break :drawing) == null) {
-                    drawTextureCentered(
-                        textures.stone(game.currentPlayer()),
-                        geometry.position(point),
-                        geometry.spacing,
-                        app.colors.highlight,
-                    );
-                }
+    const hover_point = if (show_hover)
+        geometry.mouseToPoint(app.pointer.position)
+    else
+        ai_hover;
+
+    if (hover_point) |point| {
+        drawing: {
+            if ((game.pieceAt(point) catch break :drawing) == null) {
+                drawTextureCentered(
+                    textures.stone(game.currentPlayer()),
+                    geometry.position(point),
+                    geometry.spacing,
+                    app.colors.highlight,
+                );
             }
         }
     }
