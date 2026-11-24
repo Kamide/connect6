@@ -2,7 +2,7 @@
     .name = .connect6,
     .version = "0.0.0",
     .fingerprint = 0x90c4b81875a73bf1,
-    .minimum_zig_version = "0.17.0",
+    .minimum_zig_version = "0.17.1",
     .dependencies = .{
         .emsdk = .{
             .url = "git+https://github.com/emscripten-core/emsdk#4.0.9",
