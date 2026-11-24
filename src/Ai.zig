@@ -1,5 +1,6 @@
 const std = @import("std");
 const c6 = @import("connect6");
+const Comparator = @import("Comparator.zig");
 
 const Ai = @This();
 allocator: std.mem.Allocator,
@@ -53,7 +54,7 @@ pub fn chooseMove(ai: *Ai, game: *c6.Game) !c6.Point {
         ScoredPoint,
         scored,
         {},
-        ScoredPoint.lessThan,
+        ScoredPoint.by.score.descending,
     );
 
     return selectPoint(ai, scored);
@@ -63,9 +64,9 @@ const ScoredPoint = struct {
     point: c6.Point,
     score: i32,
 
-    fn lessThan(_: void, left: ScoredPoint, right: ScoredPoint) bool {
-        return left.score > right.score;
-    }
+    const by = struct {
+        const score = Comparator.by(ScoredPoint, "score");
+    };
 };
 
 fn collectCandidates(
