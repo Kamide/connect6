@@ -582,12 +582,7 @@ const App = struct {
             const random = app.prng.random();
             const seed = random.int(u64);
             const temperature = 0.05 + random.float(f64) * 0.15;
-
-            const search_depth = if (comptime is_wasm)
-                1
-            else
-                random.intRangeAtMost(usize, 1, 2);
-
+            const search_depth = if (comptime is_wasm) 1 else 2;
             app.ai = .init(app.allocator, seed, temperature, search_depth);
         } else {
             app.ai = null;

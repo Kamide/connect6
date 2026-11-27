@@ -30,7 +30,7 @@ pub fn init(
     return .{
         .allocator = allocator,
         .prng = .init(seed),
-        .temperature = std.math.clamp(temperature, 0.0, 1.0),
+        .temperature = @max(0.0, temperature),
         .search_depth = search_depth,
         .cancelation_requested = .init(false),
     };
@@ -57,6 +57,14 @@ pub fn chooseMove(ai: *Ai, game: *c6.Game) AiError!c6.Point {
         return AiError.Canceled;
     }
 
+    if (ai.search_depth == 0) {
+        return chooseFallbackMove(
+            game,
+            ai.allocator,
+            ai.prng.random(),
+        );
+    }
+
     var candidate_points: std.ArrayList(c6.Point) = .empty;
     defer candidate_points.deinit(ai.allocator);
 
@@ -73,6 +81,14 @@ pub fn chooseMove(ai: *Ai, game: *c6.Game) AiError!c6.Point {
             game,
             ai.allocator,
             ai.prng.random(),
+        );
+    }
+
+    if (ai.search_depth == 1) {
+        return chooseGreedyMove(
+            ai,
+            game,
+            candidate_points.items,
         );
     }
 
@@ -93,10 +109,7 @@ pub fn chooseMove(ai: *Ai, game: *c6.Game) AiError!c6.Point {
     );
     defer ai.allocator.free(scored_candidates);
 
-    const opponent_depth = if (ai.search_depth > 0)
-        ai.search_depth - 1
-    else
-        0;
+    const opponent_depth = ai.search_depth - 1;
 
     for (root_candidates, 0..) |candidate, index| {
         if (ai.isCanceled()) {
@@ -114,6 +127,47 @@ pub fn chooseMove(ai: *Ai, game: *c6.Game) AiError!c6.Point {
             -SEARCH_INFINITY_SCORE,
             SEARCH_INFINITY_SCORE,
         );
+
+        scored_candidates[index] = .{
+            .point = candidate,
+            .score = score,
+        };
+    }
+
+    std.mem.sort(
+        ScoredPoint,
+        scored_candidates,
+        {},
+        ScoredPoint.by.score.descending,
+    );
+
+    return selectCandidate(ai, scored_candidates);
+}
+
+fn chooseGreedyMove(
+    ai: *Ai,
+    game: *c6.Game,
+    candidate_points: []const c6.Point,
+) AiError!c6.Point {
+    const current_player = game.currentPlayer();
+
+    const scored_candidates = try ai.allocator.alloc(
+        ScoredPoint,
+        candidate_points.len,
+    );
+    defer ai.allocator.free(scored_candidates);
+
+    for (candidate_points, 0..) |candidate, index| {
+        if (ai.isCanceled()) {
+            return AiError.Canceled;
+        }
+
+        try game.play(candidate);
+
+        const score = blk: {
+            defer _ = game.undo();
+            break :blk try evaluate(ai, game, current_player);
+        };
 
         scored_candidates[index] = .{
             .point = candidate,
