@@ -10,7 +10,7 @@ pub fn main(init: std.process.Init) !void {
     var seed: u64 = undefined;
     init.io.random(std.mem.asBytes(&seed));
 
-    var app = App.init(init.gpa, seed);
+    var app = App.init(init.gpa, init.io, seed);
     defer app.deinit();
     try app.main();
 }
@@ -365,61 +365,63 @@ const Action = union(enum) {
 };
 
 const AiJob = struct {
-    thread: ?std.Thread = null,
-    active: bool = false,
+    ai: ?*Ai = null,
+    future: ?std.Io.Future(void) = null,
     done: std.atomic.Value(bool) = .init(true),
-    result: c6.Point = undefined,
-    ok: bool = false,
+    result: ?c6.Point = null,
     discard_result: bool = false,
     snapshot: ?*c6.Game = null,
 
-    fn start(job: *AiJob, ai: *Ai, game: *const c6.Game) !void {
-        std.debug.assert(!job.active);
+    fn isActive(job: *const AiJob) bool {
+        return job.snapshot != null;
+    }
+
+    fn start(job: *AiJob, io: std.Io, ai: *Ai, game: *const c6.Game) !void {
+        std.debug.assert(!job.isActive());
+        std.debug.assert(job.future == null);
+        std.debug.assert(job.ai == null);
 
         const snapshot = try game.clonePointer(game.allocator);
         errdefer snapshot.deinitPointer();
 
+        ai.resetCancel();
+
+        job.ai = ai;
         job.snapshot = snapshot;
+        job.result = null;
         job.discard_result = false;
         job.done.store(false, .release);
-        job.ok = false;
-        job.active = true;
 
         if (comptime is_wasm) {
-            dispatch(job, ai, snapshot);
-            return;
+            job.future = io.async(
+                dispatch,
+                .{ job, ai, snapshot },
+            );
+        } else {
+            job.future = io.concurrent(
+                dispatch,
+                .{ job, ai, snapshot },
+            ) catch |err| {
+                std.log.err("AiJobStartFutureError: {any}", .{err});
+                dispatch(job, ai, snapshot);
+                return;
+            };
         }
-
-        job.thread = std.Thread.spawn(
-            .{},
-            dispatch,
-            .{ job, ai, snapshot },
-        ) catch |err| {
-            job.active = false;
-            job.snapshot = null;
-            return err;
-        };
     }
 
     fn dispatch(job: *AiJob, ai: *Ai, game: *c6.Game) void {
-        if (ai.chooseMove(game)) |point| {
-            job.result = point;
-            job.ok = true;
-        } else |_| {
-            job.ok = false;
-        }
-
+        job.result = ai.chooseMove(game) catch null;
         job.done.store(true, .release);
     }
 
-    fn poll(job: *AiJob) ?c6.Point {
-        if (!job.active or !job.done.load(.acquire)) {
+    fn poll(job: *AiJob, io: std.Io) ?c6.Point {
+        if (!job.isActive() or !job.done.load(.acquire)) {
             return null;
         }
 
-        if (job.thread) |thread| {
-            thread.join();
-            job.thread = null;
+        if (job.future) |*future| {
+            future.await(io);
+            job.future = null;
         }
 
         if (job.snapshot) |snapshot| {
@@ -427,22 +429,32 @@ const AiJob = struct {
             job.snapshot = null;
         }
 
-        const result = if (!job.discard_result and job.ok) job.result else null;
-        job.active = false;
+        job.ai = null;
+
+        const result = if (job.discard_result) null else job.result;
+        job.result = null;
         job.discard_result = false;
         return result;
     }
 
     fn invalidate(job: *AiJob) void {
-        if (job.active) {
+        if (job.isActive()) {
             job.discard_result = true;
+
+            if (job.ai) |ai| {
+                ai.requestCancel();
+            }
         }
     }
 
-    fn cancel(job: *AiJob) void {
-        if (job.thread) |thread| {
-            thread.join();
-            job.thread = null;
+    fn cancel(job: *AiJob, io: std.Io) void {
+        if (job.ai) |ai| {
+            ai.requestCancel();
+        }
+
+        if (job.future) |*future| {
+            future.await(io);
+            job.future = null;
         }
 
         if (job.snapshot) |snapshot| {
@@ -450,7 +462,8 @@ const AiJob = struct {
             job.snapshot = null;
         }
 
-        job.active = false;
+        job.ai = null;
+        job.result = null;
         job.discard_result = false;
         job.done.store(true, .release);
     }
@@ -458,6 +471,7 @@ const AiJob = struct {
 
 const App = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     colors: Colors,
     prng: std.Random.DefaultPrng,
     fonts: Fonts = undefined,
@@ -482,16 +496,17 @@ const App = struct {
     shake: ShakeAnimation = .{},
     redo_stack: std.ArrayList(c6.Point) = .empty,
 
-    fn init(allocator: std.mem.Allocator, seed: u64) App {
+    fn init(allocator: std.mem.Allocator, io: std.Io, seed: u64) App {
         return .{
             .allocator = allocator,
+            .io = io,
             .colors = .init(),
             .prng = .init(seed),
         };
     }
 
     fn deinit(app: *App) void {
-        app.ai_job.cancel();
+        app.ai_job.cancel(app.io);
         if (app.game) |*game| {
             game.deinit();
         }
@@ -567,7 +582,13 @@ const App = struct {
             const random = app.prng.random();
             const seed = random.int(u64);
             const temperature = 0.05 + random.float(f64) * 0.15;
-            app.ai = .init(app.allocator, seed, temperature);
+
+            const search_depth = if (comptime is_wasm)
+                1
+            else
+                random.intRangeAtMost(usize, 1, 2);
+
+            app.ai = .init(app.allocator, seed, temperature, search_depth);
         } else {
             app.ai = null;
         }
@@ -785,7 +806,7 @@ const App = struct {
     }
 
     fn cancelAiTurn(app: *App) void {
-        app.ai_job.cancel();
+        app.ai_job.cancel(app.io);
         app.resetAiState();
     }
 };
@@ -1292,14 +1313,14 @@ const Duel = struct {
         }
 
         if (!app.ai_job.discard_result and
-            (app.ai_job.active or
+            (app.ai_job.isActive() or
                 (app.ai_pending_move != null and
                     app.ai_think_timer > 0.0)))
         {
             app.updateAiThinking(game, size);
         }
 
-        if (app.ai_job.poll()) |move| {
+        if (app.ai_job.poll(app.io)) |move| {
             app.ai_pending_move = move;
             app.ai_move_revealed = false;
             app.ai_reveal_timer = 0.0;
@@ -1335,21 +1356,21 @@ const Duel = struct {
         const ai_turn = !over and isAiTurn(app, game);
 
         if (ai_turn and
-            !app.ai_job.active and
+            !app.ai_job.isActive() and
             app.ai_pending_move == null and
             app.redo_stack.items.len == 0)
         {
             if (app.ai) |*ai| {
-                app.ai_job.start(ai, game) catch |err| {
+                app.ai_job.start(app.io, ai, game) catch |err| {
                     std.log.err("AiStartError: {any}", .{err});
                 };
-                if (app.ai_job.active) {
+                if (app.ai_job.isActive()) {
                     app.beginAiThinking(game, size);
                 }
             }
         }
 
-        const busy = app.ai_job.active or app.ai_pending_move != null;
+        const busy = app.ai_job.isActive() or app.ai_pending_move != null;
         const human_turn = !over and !ai_turn and !busy;
 
         if (game.canUndo() and rl.isKeyPressed(.z)) {
